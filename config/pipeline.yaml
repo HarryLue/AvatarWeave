@@ -1,0 +1,163 @@
+version: 1
+# LiveKit is always the runtime. mode controls real pipeline vs credential-free demo.
+mode: pipeline
+profile: alibaba
+session:
+  turn_detection: vad
+  min_endpointing_delay: 0.25
+  max_endpointing_delay: 2.0
+  preemptive_generation: true
+  preemptive_tts: false
+  min_interruption_duration: 0.5
+  false_interruption_timeout: 1.0
+  resume_false_interruption: true
+  user_away_timeout: 300
+  vad:
+    min_silence_duration: 0.3
+profiles:
+  openai-streaming:
+    llm: &openai_llm
+      provider: openai
+      options:
+        model: ${LLM_MODEL:-gpt-4.1-mini}
+        api_key: ${OPENAI_API_KEY}
+        base_url: ${LLM_BASE_URL:-https://api.openai.com/v1}
+    stt: &openai_asr
+      provider: openai
+      options:
+        model: gpt-4o-mini-transcribe
+        language: zh
+        use_realtime: true
+        api_key: ${OPENAI_API_KEY}
+        base_url: ${ASR_BASE_URL:-https://api.openai.com/v1}
+    tts:
+      provider: openai
+      options:
+        model: ${TTS_MODEL:-gpt-4o-mini-tts}
+        voice: ${TTS_VOICE:-coral}
+        api_key: ${OPENAI_API_KEY}
+        base_url: ${TTS_BASE_URL:-https://api.openai.com/v1}
+  huoshan:
+    llm: *openai_llm
+    stt:
+      provider: huoshan
+      options:
+        app_key: ${VOLC_APP_KEY}
+        access_key: ${VOLC_ACCESS_KEY}
+        language: zh-CN
+        endpoint_url: wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async
+        resource_id: volc.bigasr.sauc.duration
+        enable_nonstream: false
+    tts: &huoshan_tts
+      provider: huoshan
+      options:
+        app_id: ${VOLC_APP_ID}
+        access_token: ${VOLC_ACCESS_TOKEN}
+        voice: ${VOLC_TTS_VOICE:-zh_female_qingxinnvsheng_mars_bigtts}
+        sample_rate: 24000
+  openai-asr-huoshan-tts:
+    llm: *openai_llm
+    stt: *openai_asr
+    tts: *huoshan_tts
+  openai-asr-kokoro-tts:
+    llm: *openai_llm
+    stt: *openai_asr
+    tts:
+      provider: kokoro
+      options:
+        base_url: ${KOKORO_BASE_URL:-http://127.0.0.1:8880/v1}
+        voice: ${KOKORO_VOICE:-zf_xiaoxiao}
+        speed: 1.0
+        min_phrase_chars: 12
+        max_phrase_chars: 80
+  alibaba:
+    llm: *openai_llm
+    stt:
+      provider: alibaba
+      options:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: paraformer-realtime-v2
+        sample_rate: 16000
+    tts:
+      provider: alibaba
+      options:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: cosyvoice-v3-flash
+        voice: ${ALI_TTS_VOICE:-longfeifei_v3}
+        volume: 100
+  alibaba-asr-kokoro-tts:
+    llm: *openai_llm
+    stt:
+      provider: alibaba
+      options:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: paraformer-realtime-v2
+        sample_rate: 16000
+    tts:
+      provider: kokoro
+      options:
+        base_url: ${KOKORO_BASE_URL:-http://127.0.0.1:8880/v1}
+        voice: ${KOKORO_VOICE:-zf_xiaoxiao}
+        speed: 1.0
+        min_phrase_chars: 12
+        max_phrase_chars: 80
+  zhiai:
+    llm: *openai_llm
+    stt:
+      provider: zhiai
+      options:
+        server_url: ${ZHIAI_ASR_SERVER:-127.0.0.1:8011}
+        model_name: ${ZHIAI_ASR_MODEL:-sensevoice}
+    tts:
+      provider: zhiai
+      options:
+        url: ${ZHIAI_TTS_URL:-ws://127.0.0.1:11992/ws_multiturn/tts_stream}
+        speaker: ${ZHIAI_TTS_SPEAKER:-liubei}
+  cartesia:
+    llm: *openai_llm
+    stt:
+      provider: cartesia
+      options:
+        api_key: ${CARTESIA_API_KEY}
+        model: ink-whisper
+        language: zh
+    tts:
+      provider: cartesia
+      options:
+        api_key: ${CARTESIA_API_KEY}
+        model: sonic-turbo
+        voice: ${CARTESIA_VOICE}
+        language: zh
+  deepgram-elevenlabs:
+    llm: *openai_llm
+    stt:
+      provider: deepgram
+      options:
+        api_key: ${DEEPGRAM_API_KEY}
+        model: nova-3
+        language: multi
+    tts:
+      provider: elevenlabs
+      options:
+        api_key: ${ELEVEN_API_KEY}
+        model: eleven_multilingual_v2
+  google-huoshan:
+    llm:
+      provider: google
+      options:
+        api_key: ${GOOGLE_API_KEY}
+        model: ${GOOGLE_MODEL:-gemini-2.5-flash}
+        thinking_config:
+          thinking_budget: 0
+    stt:
+      provider: huoshan
+      options:
+        app_key: ${VOLC_APP_KEY}
+        access_key: ${VOLC_ACCESS_KEY}
+        language: zh-CN
+    tts:
+      provider: huoshan
+      options:
+        app_id: ${VOLC_APP_ID}
+        access_token: ${VOLC_ACCESS_TOKEN}
+        voice: ${VOLC_TTS_VOICE:-zh_female_qingxinnvsheng_mars_bigtts}

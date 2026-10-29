@@ -1,0 +1,79 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits"
+  ],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "timezone": "Asia/Shanghai",
+  "dependencyDashboard": true,
+  "packageRules": [
+    {
+      "matchPackageNames": [
+        "livekit-client",
+        "@livekit/{/,}**",
+        "livekit-agents",
+        "livekit-plugins-{/,}**",
+        "livekit-api"
+      ],
+      "groupName": "livekit-compatible",
+      "automerge": false
+    },
+    {
+      "matchPackageNames": [
+        "pixi.js",
+        "pixi-live2d-display",
+        "live2d-motionsync"
+      ],
+      "groupName": "live2d-renderer",
+      "automerge": false
+    },
+    {
+      "matchPackageNames": [
+        "livekit-client",
+        "@livekit/{/,}**",
+        "livekit-agents",
+        "livekit-plugins-{/,}**",
+        "livekit-api"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "matchPackageNames": [
+        "kokoro-onnx",
+        "misaki",
+        "onnxruntime",
+        "onnxruntime-gpu"
+      ],
+      "groupName": "kokoro-runtime-compatible",
+      "automerge": false
+    }
+  ],
+  "includePaths": [
+    "package.json",
+    "package-lock.json",
+    "packages/**/package.json",
+    "apps/**/package.json",
+    "backend/pyproject.toml",
+    "backend/uv.lock",
+    "backend/kokoro-runtime-gpu/pyproject.toml",
+    "backend/kokoro-runtime-gpu/uv.lock",
+    "compose.yaml",
+    ".github/workflows/**"
+  ],
+  "ignorePaths": [
+    "backend/livekit/plugins/huoshan/**",
+    "backend/livekit/plugins/alibaba/**",
+    "backend/livekit/plugins/zhiai/**",
+    "models/**",
+    ".tools/**",
+    ".cache/**"
+  ]
+}

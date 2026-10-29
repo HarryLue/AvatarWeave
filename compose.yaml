@@ -1,0 +1,25 @@
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.11
+    command: --config /etc/livekit.yaml --dev
+    ports:
+      - "17880:17880"
+      - "17881:17881"
+      - "50100-50200:50100-50200/udp"
+    volumes:
+      - ./infra/livekit.yaml:/etc/livekit.yaml:ro
+  postgres:
+    profiles: [postgres]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: avatar
+      POSTGRES_PASSWORD: avatar
+      POSTGRES_DB: avatar
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avatar"]
+      interval: 5s
+      retries: 10
+volumes:
+  postgres-data:

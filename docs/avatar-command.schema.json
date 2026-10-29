@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "ExpressionCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "expression",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "version",
+        "id"
+      ],
+      "title": "ExpressionCommand",
+      "type": "object"
+    },
+    "MotionCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "index": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 128,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "motion",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "index",
+        "version",
+        "id"
+      ],
+      "title": "MotionCommand",
+      "type": "object"
+    }
+  },
+  "$id": "urn:avatarweave:command:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "discriminator": {
+    "mapping": {
+      "expression": "#/$defs/ExpressionCommand",
+      "motion": "#/$defs/MotionCommand"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/MotionCommand"
+    },
+    {
+      "$ref": "#/$defs/ExpressionCommand"
+    }
+  ],
+  "title": "AvatarWeave command v1"
+}

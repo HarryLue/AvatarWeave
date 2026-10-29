@@ -1,0 +1,23 @@
+node_modules/
+.venv/
+dist/
+.env
+*.db
+*.db-*
+__pycache__/
+.pytest_cache/
+*.tgz
+logs/
+.playwright/
+.tools/
+test-results/
+.ruff_cache/
+
+.runtime/
+
+.cache/
+
+# Downloaded Kokoro model and voice assets (SHA256 pinned by installer)
+models/kokoro/
+
+原始的env

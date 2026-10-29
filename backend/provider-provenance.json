@@ -1,0 +1,90 @@
+{
+  "huoshan/log.py": {
+    "sha256": "ee460f34cfe3359007b032b4249a7981e15acafad01d380970b306455a1163c6",
+    "source": "/data/luwei/agents-v2/livekit/plugins/huoshan/log.py"
+  },
+  "huoshan/stt.py": {
+    "sha256": "903284a2421fe5946eb9fbd83e23a134b8fca51e8b7b67a699770bff5f9c4e25",
+    "source": "/data/luwei/agents-v2/livekit/plugins/huoshan/stt.py"
+  },
+  "huoshan/protocols.py": {
+    "sha256": "dbc88723f540ec5658845dd4af9c9636f51da1ff1049f0295bcbc5cd01268e2a",
+    "source": "/data/luwei/agents-v2/livekit/plugins/huoshan/protocols.py"
+  },
+  "huoshan/version.py": {
+    "sha256": "45ca2a15dd4a62a8c195337a826ad99f6949b6f0ec0e187bbf89576ddb7af09e",
+    "source": "/data/luwei/agents-v2/livekit/plugins/huoshan/version.py"
+  },
+  "huoshan/tts.py": {
+    "sha256": "bc4495ca5d34a2c9609815f0631d2403f738ef7a3a4baef949e73d5f499951a4",
+    "source": "/data/luwei/agents-v2/livekit/plugins/huoshan/tts.py"
+  },
+  "huoshan/__init__.py": {
+    "sha256": "c90e1ac6f34bf25e38296c46debd86807e578566e5acb6ddb2f69b30ea9d4b38",
+    "source": "/data/luwei/agents-v2/livekit/plugins/huoshan/__init__.py"
+  },
+  "huoshan/utils.py": {
+    "sha256": "5b2e61122cfb7b8c5432f15973bc4cc4dd744b916b9c8f95d16e62b0b9b92645",
+    "source": "/data/luwei/agents-v2/livekit/plugins/huoshan/utils.py"
+  },
+  "alibaba/log.py": {
+    "sha256": "22882c143ce19d6c030c7d90188511986730da11d7834a62155a0fbf4445a03a",
+    "source": "/data/luwei/agents-v2/livekit/plugins/alibaba/log.py"
+  },
+  "alibaba/stt.py": {
+    "sha256": "ee35181c2b9094659c0f8a27ec785eb0154d3418aee199b4114509828ce8766b",
+    "source": "/data/luwei/agents-v2/livekit/plugins/alibaba/stt.py"
+  },
+  "alibaba/version.py": {
+    "sha256": "272173a1695141a8dcf456ee23a8af8d245ef37615bf9060ed5f6cfff9fcf665",
+    "source": "/data/luwei/agents-v2/livekit/plugins/alibaba/version.py"
+  },
+  "alibaba/tts.py": {
+    "sha256": "21ae2d7213ffc27cfbe43862ca25bf51bbb49e9d8045607bfe286d2caf6b30b9",
+    "source": "/data/luwei/agents-v2/livekit/plugins/alibaba/tts.py"
+  },
+  "alibaba/constants.py": {
+    "sha256": "cc937f0a85016c24e7dfcd793e34a8eab093204102243efa53abbe390ef1cfd3",
+    "source": "/data/luwei/agents-v2/livekit/plugins/alibaba/constants.py"
+  },
+  "alibaba/__init__.py": {
+    "sha256": "7d959bb536ee8c302bc441018885d2aac45e96497840750e7c64754227ffce03",
+    "source": "/data/luwei/agents-v2/livekit/plugins/alibaba/__init__.py"
+  },
+  "zhiai/log.py": {
+    "sha256": "b4542647737e5892f0ded259bd3f647ce5f141eda56df213092f2b47364ed68c",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/log.py"
+  },
+  "zhiai/stt.py": {
+    "sha256": "6ed0b50428cb2353103d84a845c966c8cb36942893f2296049860217003ee1e8",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/stt.py"
+  },
+  "zhiai/version.py": {
+    "sha256": "9d6f3d2ff53d378ba44f7c003b705e4ea39a6bcef32d43ac105cfc4e488a20ff",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/version.py"
+  },
+  "zhiai/tts.py": {
+    "sha256": "1dea7f2c56358a3169c6a506c885bda17a0f5353edfa0ecbbcf30f7e6ecb8eeb",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/tts.py"
+  },
+  "zhiai/tts_ws.py": {
+    "sha256": "48086cfeeab985d97663ddb2b6e69fa48a6001bff2fa1ea084808700f0d332ed",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/tts_ws.py"
+  },
+  "zhiai/stt2.py": {
+    "sha256": "0ad2f6601726b53eee77383f4230300d5c1e57acf0e2b775990884df2815d66e",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/stt2.py"
+  },
+  "zhiai/simple_asr_client.py": {
+    "sha256": "a4b2b0a69bff2f7ef5b744e988397da5ad1ace523de6367baad7f71f75501d2b",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/simple_asr_client.py"
+  },
+  "zhiai/tts_ws_multiturn.py": {
+    "sha256": "521bcf4b4491bcb0a4074f4bcff8916596f1abba111d89bc3c6cf3c21de66e4e",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/tts_ws_multiturn.py"
+  },
+  "zhiai/__init__.py": {
+    "sha256": "b5fdd05650c01ba950a8011b1f173a2a7ff516d39fd7ec5d9addebf66475f284",
+    "source": "/data/luwei/agents-v2/livekit/plugins/zhiai/__init__.py"
+  }
+}

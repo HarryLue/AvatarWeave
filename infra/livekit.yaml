@@ -1,0 +1,12 @@
+port: 17880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 17881
+  port_range_start: 50100
+  port_range_end: 50200
+  use_external_ip: false
+keys:
+  devkey: avatar-kit-local-development-secret-2026
+logging:
+  level: info

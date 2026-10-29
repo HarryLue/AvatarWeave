@@ -1,0 +1,18 @@
+version: 1
+default_avatar: kei
+avatars:
+  kei:
+    name: Kei
+    renderer: live2d
+    assets:
+      core_url: /avatar-assets/aitutor.min.js
+      model_url: /avatar-assets/kei_vowels_pro/kei_vowels_pro.model3.json
+      motion_sync_url: /avatar-assets/kei_vowels_pro/kei_vowels_pro.motionsync3.json
+    draggable: true
+    default_action: perform
+    actions:
+      perform:
+        label: 播放演示动作
+        type: motion
+        name: ''
+        index: 3

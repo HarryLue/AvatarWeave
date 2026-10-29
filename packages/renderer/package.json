@@ -1,0 +1,28 @@
+{
+  "name": "@avatarweave/renderer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AvatarWeave model renderer and audio-driven animation",
+  "license": "UNLICENSED",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "live2d-motionsync": "0.0.4",
+    "pixi-live2d-display": "0.4.0",
+    "pixi.js": "6.5.10"
+  }
+}

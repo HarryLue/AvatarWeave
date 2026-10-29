@@ -1,0 +1,189 @@
+{
+  "$defs": {
+    "Assets": {
+      "additionalProperties": false,
+      "properties": {
+        "core_url": {
+          "title": "Core Url",
+          "type": "string"
+        },
+        "model_url": {
+          "title": "Model Url",
+          "type": "string"
+        },
+        "motion_sync_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Motion Sync Url"
+        }
+      },
+      "required": [
+        "core_url",
+        "model_url"
+      ],
+      "title": "Assets",
+      "type": "object"
+    },
+    "Avatar": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "additionalProperties": {
+            "discriminator": {
+              "mapping": {
+                "expression": "#/$defs/ExpressionAction",
+                "motion": "#/$defs/MotionAction"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/MotionAction"
+              },
+              {
+                "$ref": "#/$defs/ExpressionAction"
+              }
+            ]
+          },
+          "title": "Actions",
+          "type": "object"
+        },
+        "assets": {
+          "$ref": "#/$defs/Assets"
+        },
+        "default_action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Action"
+        },
+        "draggable": {
+          "default": true,
+          "title": "Draggable",
+          "type": "boolean"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "renderer": {
+          "const": "live2d",
+          "default": "live2d",
+          "title": "Renderer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "assets"
+      ],
+      "title": "Avatar",
+      "type": "object"
+    },
+    "ExpressionAction": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "expression",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "type",
+        "name"
+      ],
+      "title": "ExpressionAction",
+      "type": "object"
+    },
+    "MotionAction": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "label": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "motion",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "type",
+        "name",
+        "index"
+      ],
+      "title": "MotionAction",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "avatars": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Avatar"
+      },
+      "title": "Avatars",
+      "type": "object"
+    },
+    "default_avatar": {
+      "title": "Default Avatar",
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "default_avatar",
+    "avatars"
+  ],
+  "title": "AvatarDocument",
+  "type": "object"
+}

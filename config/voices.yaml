@@ -1,0 +1,22 @@
+# Extend curated catalogs here without editing API, worker or frontend code.
+# IDs must be available to your provider/account. The configured default voice
+# is also exposed automatically, even if it is not listed below.
+version: 1
+providers:
+  openai:
+    notice: 示例音色列表，可按所选模型支持的音色扩展。
+    voices:
+      - id: coral
+        name: Coral
+        language: multi
+        language_label: 多语言
+        description: 当前项目的 OpenAI 默认音色，建议先试听。
+  huoshan:
+    notice: 请按当前账号、模型和资源权限配置可用音色。
+    voices:
+      - id: zh_female_qingxinnvsheng_mars_bigtts
+        name: 清新女声
+        language: zh
+        language_label: 普通话
+        gender: 女声
+        description: 当前项目配置的火山中文女声音色。

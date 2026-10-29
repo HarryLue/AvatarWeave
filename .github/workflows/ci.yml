@@ -1,0 +1,96 @@
+name: verify
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run pack:libs
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: avatar
+          POSTGRES_PASSWORD: avatar
+          POSTGRES_DB: avatar
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U avatar" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.19"
+      - run: uv sync --locked
+        working-directory: backend
+      - run: uv run python ../scripts/check-config.py
+        working-directory: backend
+        env:
+          PIPELINE_MODE: mock
+      - run: uv run python ../scripts/config-schema.py --check
+        working-directory: backend
+      - run: uv run pytest -q
+        working-directory: backend
+        env:
+          TEST_DATABASE: ${{ matrix.database }}
+          POSTGRES_TEST_URL: postgresql+asyncpg://avatar:avatar@localhost:5432/avatar
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.19"
+      - run: npm ci
+      - run: npm run build
+      - run: uv sync --locked
+        working-directory: backend
+      - run: npx playwright install --with-deps chromium
+      - run: cp .env.example .env
+      - run: docker compose up -d livekit
+      - name: Verify browser and agent
+        run: |
+          python3 scripts/dev.py --external-livekit &
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:5174/ >/dev/null && curl --fail --silent http://127.0.0.1:8090/api/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          backend/.venv/bin/python scripts/smoke.py
+          node scripts/browser-smoke.mjs
+          node scripts/browser-config-smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-evidence
+          path: |
+            logs/
+            docs/demo*.png
+  bootstrap:
+    runs-on: ubuntu-latest
+    container: debian:12-slim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install from a clean Debian environment
+        run: bash scripts/deploy.sh install
+      - name: Verify managed runtimes
+        run: |
+          .tools/bin/node --version
+          .tools/bin/uv --version
+          .tools/livekit-server --version
+          backend/.venv/bin/python scripts/check-config.py

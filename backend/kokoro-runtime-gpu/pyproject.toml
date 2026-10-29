@@ -1,0 +1,17 @@
+[project]
+name = "avatarweave-kokoro-gpu-runtime"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "kokoro-onnx==0.6.1",
+  "onnxruntime-gpu==1.23.2",
+  "misaki[zh]>=0.9.4,<0.10",
+  "livekit-agents~=1.8",
+  "fastapi>=0.124,<1",
+  "uvicorn>=0.38,<1",
+  "pydantic-settings>=2.12,<3",
+]
+
+[tool.uv]
+# GPU runtime supplies the onnxruntime import. Never install both wheels together.
+override-dependencies = ["onnxruntime; python_version < '0'"]
