@@ -1,47 +1,48 @@
 # AvatarWeave
 
-实时数字人交互 SDK、可配置 LiveKit Agent 和独立 Demo。前端提供 core、renderer、React 三个包；后端可组合云端/自建 ASR、LLM、TTS。SQLite 默认可用，支持 PostgreSQL。本项目只维护一个当前接口。
+**English** | [简体中文](README.zh-CN.md)
 
-## 安装与启动
+A real-time interactive avatar SDK, a configurable LiveKit Agent, and a standalone demo. The frontend provides core, renderer, and React packages; the backend combines cloud or self-hosted ASR, LLM, and TTS services. SQLite works out of the box, with PostgreSQL support available. The project maintains a single current API.
 
-Linux Debian/Ubuntu：
+## Installation and startup
+
+On Debian/Ubuntu Linux, run the following from the project root:
 
 ```bash
-cd /data/luwei/avatarweave
 bash scripts/deploy.sh
 ```
 
-脚本安装所需系统依赖、Node.js/uv/Python、LiveKit Server、锁定的前后端依赖及本地模型，然后构建并启动服务。已有 `.env`、数据库和模型缓存保留；`.env` 不存在时创建模板，初次模板为无模型凭证的文字 mock 模式。
+The script installs system dependencies, Node.js, uv, Python, LiveKit Server, locked frontend and backend dependencies, and local models, then builds and starts the services. Existing `.env` files, databases, and model caches are preserved. If `.env` does not exist, the script creates a template that defaults to text-only mock mode without model credentials.
 
 ```bash
-bash scripts/deploy.sh install  # 只安装
+bash scripts/deploy.sh install  # Install only
 bash scripts/deploy.sh start
 bash scripts/deploy.sh restart
 bash scripts/deploy.sh status
 bash scripts/deploy.sh stop
 ```
 
-可选 `install --skip-system-deps` 和 `install --all-providers`。首次安装需要访问 GitHub、PyPI、npm 等；网络代理使用标准环境变量。日志在 `logs/`。
+Installation also supports `install --skip-system-deps` and `install --all-providers`. The first installation requires access to GitHub, PyPI, npm, and other package sources. Configure network proxies through standard environment variables. Logs are stored in `logs/`.
 
-真实语音在 `.env` 设置 `PIPELINE_MODE=pipeline` 并填写所选 provider 的凭证；`config/pipeline.yaml` 选择组合。`PIPELINE_PROFILE` 可显式覆盖 profile，`PIPELINE_CONFIG` 可指定配置文件。
+For real voice interaction, set `PIPELINE_MODE=pipeline` in `.env`, provide credentials for the selected providers, and choose a profile in `config/pipeline.yaml`. Use `PIPELINE_PROFILE` to override the profile explicitly, or `PIPELINE_CONFIG` to select a configuration file.
 
-前端 http://localhost:5174，API 文档 http://localhost:8090/docs。`scripts/dev.py` 只启动已安装的项目，不代替依赖安装。
+The frontend runs at http://localhost:5174, and API documentation is available at http://localhost:8090/docs. `scripts/dev.py` starts an already installed project; it does not install dependencies.
 
-## SDK 与服务边界
+## SDK and service boundaries
 
-| 路径 | 职责 |
+| Path | Responsibility |
 | --- | --- |
-| `packages/core` / `@avatarweave/core` | Room、文字流、音频绑定、当前动作协议 |
-| `packages/renderer` / `@avatarweave/renderer` | 模型渲染、口型、动作、生命周期 |
-| `packages/react` / `@avatarweave/react` | `AvatarView` React 组件 |
-| `apps/demo` | 使用 SDK 的参考前端 |
-| `backend/avatarweave_agent` | API、Agent、配置、历史、推理编排 |
-| `backend/livekit/plugins` | 供应商协议适配 |
-| `backend/kokoro-runtime-gpu` | 隔离 GPU ONNX Runtime 的运行环境 |
-| `config` | 模型组合、数字人、音色目录 |
-| `infra` | 基础设施配置 |
-| `scripts` | 安装、启动、模型下载、验收 |
-| `docs` | 当前架构、协议、schema 和验证记录 |
+| `packages/core` / `@avatarweave/core` | Rooms, text streams, audio binding, and the current action protocol |
+| `packages/renderer` / `@avatarweave/renderer` | Model rendering, lip sync, actions, and lifecycle management |
+| `packages/react` / `@avatarweave/react` | The `AvatarView` React component |
+| `apps/demo` | Reference frontend built with the SDK |
+| `backend/avatarweave_agent` | API, Agent, configuration, history, and inference orchestration |
+| `backend/livekit/plugins` | Provider protocol adapters |
+| `backend/kokoro-runtime-gpu` | Isolated GPU ONNX Runtime environment |
+| `config` | Model profiles, avatars, and voice catalogs |
+| `infra` | Infrastructure configuration |
+| `scripts` | Installation, startup, model downloads, and verification |
+| `docs` | Current architecture, protocol, schemas, and verification records |
 
 ```ts
 import { AvatarClient } from '@avatarweave/core';
@@ -54,66 +55,66 @@ npm run check
 npm run pack:libs
 ```
 
-产物为项目根目录的三个 `avatarweave-*.tgz`。Python 应用只使用 `avatarweave_agent`，Kokoro TTS 直接使用 `from livekit.plugins.kokoro import TTS`。当前包未发布到公共 registry。
+Packaging produces three `avatarweave-*.tgz` archives in the project root. The Python application uses the `avatarweave_agent` namespace; Kokoro TTS is imported directly with `from livekit.plugins.kokoro import TTS`. The packages are not currently published to a public registry.
 
-## 语音与数字人配置
+## Voice and avatar configuration
 
-LiveKit 始终是实时传输和 Agent 框架。模型供应商独立选择：
+LiveKit provides real-time transport and the Agent framework. Model providers are selected independently:
 
 ```text
-麦克风 → LiveKit → ASR → LLM → TTS → LiveKit → 浏览器音频与口型
+Microphone → LiveKit → ASR → LLM → TTS → LiveKit → Browser audio and lip sync
 ```
 
-- `config/pipeline.yaml`：ASR/LLM/TTS、端点、轮次检测、打断和提前生成参数。
-- `config/avatars.yaml`：名称、资源 URL、默认数字人和语义动作映射。
-- `config/voices.yaml`：各 provider 可用音色与说明，扩展插件目录。
-- `.env`：凭证、数据库、配置位置和本机设备参数；公共接口不返回这些值。
+- `config/pipeline.yaml`: ASR/LLM/TTS providers, endpointing, turn detection, interruption, and preemptive generation settings.
+- `config/avatars.yaml`: Names, asset URLs, the default avatar, and semantic action mappings.
+- `config/voices.yaml`: Available voices and descriptions for each provider, extending the plugin catalogs.
+- `.env`: Credentials, database settings, configuration paths, and local device settings. Public APIs do not expose these values.
 
-配置中提供 OpenAI、火山、阿里、自建、Cartesia、Deepgram/ElevenLabs、Google 等组合，以及 OpenAI/阿里 ASR + Kokoro TTS。只解析所选节点的环境变量。`LLM_BASE_URL` / `ASR_BASE_URL` / `TTS_BASE_URL` 分别控制对应节点，具体以 YAML options 为准。供应商可用性受账号和资源权限约束。
+The configuration includes profiles for OpenAI, Volcengine, Alibaba, self-hosted services, Cartesia, Deepgram/ElevenLabs, Google, and others, as well as OpenAI or Alibaba ASR paired with Kokoro TTS. Only environment variables for selected nodes are resolved. `LLM_BASE_URL`, `ASR_BASE_URL`, and `TTS_BASE_URL` configure the corresponding nodes where used by the YAML options. Provider availability depends on account permissions and access to the required resources.
 
-数字人和音色在建立会话前选择，通过唯一的 `avatarweave_session` JSON envelope 传给 Agent。动作只使用 `avatarweave.command.v1`，一次发送；转写只走官方 Text Stream。完整规则见 [协议](docs/protocol.md)。
+Select an avatar and voice before establishing a session. These choices are passed to the Agent through a single `avatarweave_session` JSON envelope. Actions use only `avatarweave.command.v1` and are sent once; transcription uses the official Text Stream API. See the [protocol documentation](docs/protocol.md) for the full specification.
 
-## 本地 Kokoro FP32
+## Local Kokoro FP32
 
-本地推理使用非量化 `kokoro-v1.0.onnx` 和配套音色文件，固定 SHA256 校验并缓存到 `models/kokoro/`。ASR 和 LLM 仍按各自配置运行。
+Local inference uses the unquantized `kokoro-v1.0.onnx` model and its voice files, verified against pinned SHA256 checksums and cached in `models/kokoro/`. ASR and LLM services continue to use their own configurations.
 
 ```dotenv
 PIPELINE_MODE=pipeline
 PIPELINE_PROFILE=openai-asr-kokoro-tts
-OPENAI_API_KEY=你的密钥
+OPENAI_API_KEY=your-api-key
 KOKORO_PRECISION=fp32
 KOKORO_DEVICE=gpu
 KOKORO_GPU_ID=0
 ```
 
-GPU 环境只安装 `onnxruntime-gpu`，使用机器已有 CUDA/cuDNN，**不下载或安装 CUDA/cuDNN**。需要时通过 `KOKORO_CUDA_LIB_DIR` 或 `LD_LIBRARY_PATH` 指向已有库。GPU 初始化失败会报错，不静默退回 CPU。
+The GPU environment installs only `onnxruntime-gpu` and uses the machine's existing CUDA/cuDNN libraries. It **does not download or install CUDA/cuDNN**. If needed, point `KOKORO_CUDA_LIB_DIR` or `LD_LIBRARY_PATH` to existing libraries. GPU initialization failures raise an error; there is no silent fallback to the CPU.
 
 ```bash
-# 修改设备后先确保对应依赖已安装
+# After changing devices, ensure the corresponding dependencies are installed.
 bash scripts/deploy.sh install
 python3 scripts/dev.py --restart --kokoro-device gpu --kokoro-gpu-id 0
 python3 scripts/dev.py --restart --kokoro-device cpu
 ```
 
-GPU 参数为当前进程可见的 CUDA 编号。`http://127.0.0.1:8880/health` 返回实际设备、FP32、模型文件和 providers。
+The GPU ID is the CUDA device index visible to the current process. `http://127.0.0.1:8880/health` reports the actual device, FP32 precision, model files, and execution providers.
 
-流式为“增量文本 → 短句合成 → PCM 分块送入 LiveKit”，单句仍需完成推理后出声。当前标准设置为 `speed=1.0`、`min_phrase_chars=12`、`max_phrase_chars=80`，具体以 YAML 为准。中文音色训练样本较少，先试听选择。可用 8 个中文、20 个美式英语、8 个英式英语目录项，说明见上游音色卡。
+Streaming follows this sequence: incremental text → short-phrase synthesis → PCM chunks sent to LiveKit. Each phrase must finish inference before its audio becomes available. The standard settings are `speed=1.0`, `min_phrase_chars=12`, and `max_phrase_chars=80`; refer to the YAML for the configured values. Chinese voices have fewer training samples, so preview them before choosing. The catalog includes 8 Chinese, 20 American English, and 8 British English voices; see the upstream voice cards for details.
 
-`MOCK_TTS_PREVIEW=true` 在 mock 模式启用所选 profile 的 TTS 试听，只解析 TTS 配置。`KOKORO_MANAGED=false` 使用独立部署的端点，不由本机启动器创建推理进程。
+Set `MOCK_TTS_PREVIEW=true` to enable TTS previews for the selected profile in mock mode; only the TTS configuration is resolved. Set `KOKORO_MANAGED=false` to use a separately deployed endpoint without having the local launcher create an inference process.
 
-## 服务与数据库
+## Services and databases
 
-| 服务 | 本机端口 |
+| Service | Local ports |
 | --- | --- |
-| LiveKit | TCP 17880/17881，UDP 50100–50200 |
+| LiveKit | TCP 17880/17881, UDP 50100–50200 |
 | API/Token | 127.0.0.1:8090 |
-| Agent 健康检查 | 8091 |
-| Demo 前端 | 5174 |
-| Kokoro（选择该组合时） | 127.0.0.1:8880 |
+| Agent health check | 8091 |
+| Demo frontend | 5174 |
+| Kokoro, when selected | 127.0.0.1:8880 |
 
-选择云 TTS 时不需要本地 Kokoro。`compose.yaml` 当前只提供 LiveKit 和可选 PostgreSQL，没有将 API、Agent、前端和 Kokoro 全部容器化。
+Cloud TTS profiles do not require local Kokoro. `compose.yaml` currently provides LiveKit and optional PostgreSQL; it does not containerize the API, Agent, frontend, and Kokoro together.
 
-SQLite 默认使用 `avatar.db`。PostgreSQL：
+SQLite uses `avatar.db` by default. To use PostgreSQL:
 
 ```bash
 docker compose --profile postgres up -d postgres
@@ -123,11 +124,11 @@ docker compose --profile postgres up -d postgres
 DATABASE_URL=postgresql+asyncpg://avatar:avatar@127.0.0.1:5433/avatar
 ```
 
-`AGENT_HISTORY_LIMIT=100` 控制恢复最近 N 条，范围 1–2000；先取最新记录再正序交给模型，超过 500 条也不会遗漏最新上下文。当前是房间级历史，不提供跨房间用户记忆或多租户管理。
+`AGENT_HISTORY_LIMIT=100` controls how many recent messages are restored, with a supported range of 1–2000. The latest records are fetched first, then passed to the model in chronological order, preserving the latest context even when history exceeds 500 messages. History is scoped to a room; cross-room user memory and multi-tenant management are not provided.
 
-公网部署需要浏览器可达的 LiveKit 地址、HTTPS/WSS、媒体端口与用户鉴权。Vite 用于开发，正式前端部署 `apps/demo/dist`。
+Public deployments require a browser-accessible LiveKit address, HTTPS/WSS, media ports, and user authentication. Vite is used for development; deploy `apps/demo/dist` for the production frontend.
 
-## 验证与维护
+## Verification and maintenance
 
 ```bash
 backend/.venv/bin/python -m pytest backend/tests -q
@@ -138,6 +139,6 @@ node scripts/browser-voice-smoke.mjs
 backend/.venv/bin/python scripts/voice-smoke.py --exercise-asr
 ```
 
-最后两项调用所选模型服务，可能产生供应商费用。CI 包含构建、SQLite/PostgreSQL、当前协议和浏览器验证；CPU/GPU 真实推理提供手动工作流。Renovate 必须接入远程平台后才执行依赖更新。
+The final two checks call the selected model services and may incur provider charges. CI covers builds, SQLite/PostgreSQL, the current protocol, and browser checks. Manual workflows are available for real CPU/GPU inference. Renovate dependency updates require integration with the remote repository platform.
 
-[架构](docs/architecture.md) · [协议](docs/protocol.md) · [扩展指南](docs/extending.md) · [维护](docs/maintenance.md) · [验证记录](docs/verification.md) · [第三方来源与许可](THIRD_PARTY_NOTICES.md)
+[Architecture](docs/architecture.md) · [Protocol](docs/protocol.md) · [Extension guide](docs/extending.md) · [Maintenance](docs/maintenance.md) · [Verification records](docs/verification.md) · [Third-party sources and licenses](THIRD_PARTY_NOTICES.md)
