@@ -6,13 +6,15 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from google.protobuf.json_format import ParseDict
-from livekit import api
 from pydantic import BaseModel, ConfigDict, Field
+
+from livekit import api
 
 from .avatars import load_avatars
 from .config import settings
 from .db import engine, init_db
 from .pipeline import load_pipeline
+from .practice import router as practice_router
 from .session_options import merge_options
 from .voices import open_preview, voice_service
 
@@ -25,6 +27,8 @@ async def lifespan(app):
 
 
 app = FastAPI(title="AvatarWeave", version="0.1.0", lifespan=lifespan)
+
+app.include_router(practice_router)
 
 
 async def authenticate(authorization: str = Header(default="")):

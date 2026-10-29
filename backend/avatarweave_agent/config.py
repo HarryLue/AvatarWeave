@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     kokoro_threads: int = Field(default=4, ge=1, le=64)
     agent_http_proxy: str | None = None
     agent_name: str = "avatar-assistant"
+    agent_health_port: int = Field(default=8091, ge=1, le=65535)
     api_access_key: str = ""
     allowed_agents: str = "avatar-assistant"
     agent_instructions: str = "你是一位友好的中文数字人助手。用简短、自然的口语回答。"

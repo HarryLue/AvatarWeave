@@ -61,6 +61,11 @@ def stop_tracked():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--external-livekit", action="store_true")
+    parser.add_argument(
+        "--speaking",
+        action="store_true",
+        help="Also start the hotel speaking H5 on port 5175",
+    )
     action = parser.add_mutually_exclusive_group()
     action.add_argument(
         "--restart",
@@ -130,6 +135,7 @@ def main():
     ports = (
         ([8880] if managed_kokoro else [])
         + [5174, 8090, 8091]
+        + ([5175] if args.speaking else [])
         + ([] if args.external_livekit else [17880, 17881])
     )
     for port in ports:
@@ -223,6 +229,23 @@ def main():
             ("frontend", ["npm", "run", "dev", "--", "--strictPort"], ROOT, 5174),
         ]
     )
+    if args.speaking:
+        commands.append(
+            (
+                "speaking",
+                [
+                    "npm",
+                    "run",
+                    "dev",
+                    "-w",
+                    "@avatarweave/speaking",
+                    "--",
+                    "--strictPort",
+                ],
+                ROOT,
+                5175,
+            )
+        )
     children, records = [], []
     logs = ROOT / "logs"
     logs.mkdir(exist_ok=True)
@@ -315,6 +338,8 @@ def main():
             f"Mode: {config['mode']} | Profile: {config['profile']} | Demo: http://localhost:5174 | API: http://localhost:8090/docs",
             flush=True,
         )
+        if args.speaking:
+            print("Speaking H5: http://localhost:5175/speaking/", flush=True)
         print(
             "Stop: python3 scripts/dev.py --stop | Reload .env: python3 scripts/dev.py --restart",
             flush=True,

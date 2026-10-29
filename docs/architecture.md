@@ -54,6 +54,18 @@ flowchart LR
 
 `get_messages(room, limit)` 先按时间及 ID 倒序限量查询，再将结果翻转为时间正序。Worker 使用 `AGENT_HISTORY_LIMIT`（默认 100，范围 1–2000）。不会先截取房间最早 500 条。当前仍是房间级历史，不宣称提供跨房间用户记忆、多租户隔离或数据库版本迁移。
 
+## 英语练习业务
+
+`apps/speaking` 提供 `/speaking/` 产品，`practice.py` 提供 `/api/practice/*` 业务接口。SDK Demo 保持独立。数据库新增 `practice_guests` 和 `practices`，没有修改已有对话表的结构；启动时创建新表。
+
+访客使用随机 Bearer 凭证，数据库仅保存其 SHA256 摘要。所有记录、帮助、结束、报告接口检查记录所有者。创建练习时服务端签发固定房间和 Agent 的连接凭证，将 `practice_id` 放入现有 metadata envelope 的 `context`。Worker 校验记录、房间、状态和期限，拒绝重复加入。
+
+真实模型由 `PracticeAssistant` 提供酒店角色与目标工具。目标需要按顺序提交，服务端验证证据来自已保存的用户消息；语义是否完成由 Agent 判断。帮助请求不计入用户表达或任务证据。练习按当前 provider 配置运行，对部分固定中文的 ASR 覆盖英语语言，并延长初学者停顿等待；实际模型语言覆盖仍需供应商实测。
+
+状态流为 `active → ending → ended → reporting → complete`。未加入的练习可以直接结束；已加入时，Worker 关闭会话、等待消息落库后确认 `ended`。定时任务强制最多六分钟。报告生成失败进入 `report_failed`，可重试；报告成功后复用存储结果，避免重复调用模型。生成中的请求使用 90 秒租约，服务重启后可恢复重试。
+
+报告复用当前 LLM，采用严格 JSON 数据模型，最多三条改进建议，逐条校验引用来自用户原话。没有用户表达时直接说明依据不足。mock 模式不生成学习评估。当前存储任务完成证据、用户轮次、帮助次数、时长和报告，不提供发音测评、跨设备账号或完整计费系统。访客限流适用于单实例邀请测试，生产扩容需要共享存储限流和额度策略。
+
 ## 推理和部署
 
 Kokoro 插件调用 HTTP，推理服务可在另一个进程或机器上运行。`KOKORO_MANAGED=false` 禁用本机 sidecar，由调用方管理配置端点。`scripts/check-config.py` 输出当前配置需要的本地服务，启动器据此启动。

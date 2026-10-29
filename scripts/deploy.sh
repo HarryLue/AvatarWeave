@@ -20,10 +20,13 @@ for option in "$@"; do
   esac
 done
 case "$ACTION" in
-  up|install|start|restart|stop|status) ;;
-  *) printf 'Usage: bash scripts/deploy.sh [up|install|start|restart|stop|status] [--skip-system-deps] [--all-providers]\n'; exit 2 ;;
+  up|install|publish|start|restart|stop|status) ;;
+  *) printf 'Usage: bash scripts/deploy.sh [up|install|publish|start|restart|stop|status] [--skip-system-deps] [--all-providers]\n'; exit 2 ;;
 esac
 cd "$ROOT_DIR"
+if [[ "$ACTION" == publish ]]; then
+  exec bash scripts/publish-web.sh
+fi
 mkdir -p "$TOOLS_BIN" "$ROOT_DIR/.cache/downloads"
 if [[ "$ACTION" == install || "$ACTION" == up ]]; then
   [[ "$(uname -s)" == Linux ]] || { echo 'This bootstrap targets Linux (amd64/arm64).'; exit 1; }

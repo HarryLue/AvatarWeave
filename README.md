@@ -38,6 +38,18 @@ To switch to a domain, point its DNS A record to this server, update `hosts`, an
 
 The `avatarweave-certificate.timer` checks every six hours, renews certificates when due, and validates/reloads Nginx. A self-signed fallback also retries public issuance and switches automatically when successful. Hosts without systemd use `/etc/cron.d/avatarweave-certificate`. Inspect the timer with `systemctl list-timers avatarweave-certificate.timer` and logs with `journalctl -u avatarweave-certificate.service`. Keep the checkout and `.tools/certbot` available for the renewal job.
 
+## Hotel check-in speaking practice (mobile web MVP)
+
+`apps/speaking` adds a mobile-first hotel roleplay with the existing cartoon avatar, three task goals, live captions, Chinese help, transcript-based feedback, and guest history. It reuses the backend and SDK packages. Feedback does not score pronunciation.
+
+Run `python3 scripts/dev.py --restart --speaking` to restart tracked project services and include the product frontend. With the current branch's API, Agent and LiveKit already running, `npm run dev:speaking` starts only the page at http://localhost:5175/speaking/. `SPEAKING_API_URL` overrides the default API proxy at port 8090. Existing backend processes must be restarted to load the new routes. The root build adds this application under `apps/demo/dist/speaking/`, served at `/speaking/` after deployment.
+
+Use **https://111.56.189.4/speaking/** (or your configured domain) for phone microphone access. It shares the original site's Nginx, TLS certificate renewal, API and WSS proxy. On an existing installation, `bash scripts/deploy.sh publish` builds and publishes both frontends and routes, validates and reloads Nginx, and retains existing certificates and hashed assets. It does not reinstall dependencies or restart the backend. Verify with `node scripts/browser-speaking-https-smoke.mjs`.
+
+Guest credentials expire after 30 days and remain in browser localStorage. Each guest gets five sessions per UTC day, each capped at six minutes and twelve help requests. Clearing browser storage loses access to that guest's history. Signup limiting is per process; shared rate limiting and account/entitlement management remain necessary for a broad public launch.
+
+After `npm run build`, run `backend/.venv/bin/python scripts/practice-smoke.py` for isolated LiveKit, temporary database, mock agent and mobile Chromium acceptance against the built application. Add `--pipeline` to exercise configured paid providers. Both modes clean up their test services. See [Chinese product instructions](README.zh-CN.md) for details.
+
 ## SDK and service boundaries
 
 | Path | Responsibility |

@@ -39,6 +39,38 @@ bash scripts/deploy.sh stop
 
 部署入口使用配置中的 IP/域名，例如 https://111.56.189.4/，API 文档为对应地址下的 `/docs`；HTTP 同时可用。开发前端仍为 http://localhost:5174，后端直连 http://localhost:8090/docs。`scripts/dev.py` 只启动已安装的项目，不代替依赖安装。
 
+## 酒店入住英语陪练（H5 首版）
+
+`apps/speaking` 是独立的手机优先产品入口，复用 SDK 和现有后端。固定卡通前台角色 Alex，围绕说明预订、确认晚数、询问时间三个目标练习；提供实时字幕、中文帮助、练后反馈、再次练习和访客历史。反馈只分析转写中的表达，不提供发音评分。
+
+统一启动器可同时启动后端、LiveKit、Demo 和陪练页面（`--restart` 会重启此项目已跟踪的服务）：
+
+```bash
+python3 scripts/dev.py --restart --speaking
+```
+
+若后端已运行当前代码，也可在另一个终端单独启动页面：
+
+```bash
+npm run dev:speaking
+```
+
+开发地址为 http://localhost:5175/speaking/，API 默认代理到 8090，可用 `SPEAKING_API_URL` 覆盖。后端和 Agent 需要使用当前分支代码；已经运行的旧进程需要重启才能加载新增接口。`npm run build` 先构建 Demo，再将产品构建到 `apps/demo/dist/speaking/`，部署后的产品路径为 `/speaking/`。
+
+手机语音请使用 **https://111.56.189.4/speaking/**（或 `infra/https.json` 配置域名的同路径），与 Demo 共用 Nginx、SSL 证书、自动续期、`/api/` 和 `/realtime/` WSS。5175 是本地开发入口，手机访问 HTTP 开发地址不能使用麦克风。
+
+已有 Nginx/SSL 环境中，执行 `bash scripts/deploy.sh publish` 可构建并增量发布两个前端和共享路由，校验后重载 Nginx；保留旧哈希资源、现有证书和续期任务，不重装依赖或重启后端。首次部署仍使用 `bash scripts/deploy.sh install`。
+
+访客凭证保存在浏览器 localStorage，有效期 30 天；清除浏览器数据会失去该身份的记录入口。每个身份每天最多 5 次练习，每次最多 6 分钟，最多 12 次帮助。新身份申请有单进程来源限流，适用于邀请试用；大规模公开发布前需补共享限流、账号和额度管理。通用 `/api/token` 的服务密钥不进入产品页面。
+
+先执行 `npm run build`，然后运行无付费模型的隔离验收：
+
+```bash
+backend/.venv/bin/python scripts/practice-smoke.py
+```
+
+验收使用临时数据库、独立 LiveKit/API/Agent/Vite preview 端口，运行手机尺寸 Chromium，退出时清理服务。preview 使用构建产物，避免开发热更新干扰会话。加 `--pipeline` 可测试当前配置的真实模型，会产生供应商费用。`AGENT_HEALTH_PORT` 默认 8091，可在隔离环境覆盖。
+
 ## SDK 与服务边界
 
 | 路径 | 职责 |

@@ -19,10 +19,20 @@ from livekit.agents import (
 
 from .avatars import get_avatar
 from .config import settings
-from .db import get_messages, init_db, save_message
+from .db import Practice, Session, get_messages, init_db, save_message
 from .pipeline import create_session, load_pipeline, prewarm
+from .practice import (
+    GOALS,
+    HELP,
+    INSTRUCTIONS,
+    aware,
+    complete_goal,
+    end_practice,
+    join_practice,
+    now,
+)
 from .protocol import COMMAND_TOPIC, make_command
-from .session_options import read_options
+from .session_options import read_metadata, read_options
 from .startup_tracing import install_startup_tracing
 from .voices import voice_service
 
@@ -41,7 +51,7 @@ http_proxy = (
 server = AgentServer(
     http_proxy=http_proxy,
     num_idle_processes=1,
-    port=8091,
+    port=settings.agent_health_port,
     log_level="INFO",
     initialize_process_timeout=60,
     drain_timeout=10,
@@ -63,13 +73,14 @@ async def publish_action(ctx: JobContext, avatar, action_id: str | None = None):
 
 
 class Assistant(Agent):
-    def __init__(self, ctx: JobContext, chat_ctx: llm.ChatContext, avatar):
+    def __init__(self, ctx: JobContext, chat_ctx: llm.ChatContext, avatar, instructions=None):
         actions = (
-            ", ".join(f"{key}: {value.label}" for key, value in avatar.actions.items())
-            or "无"
+            ", ".join(f"{key}: {value.label}" for key, value in avatar.actions.items()) or "无"
         )
         super().__init__(
-            instructions=settings.agent_instructions + "\n可用数字人动作：" + actions,
+            instructions=(instructions or settings.agent_instructions)
+            + "\n可用数字人动作："
+            + actions,
             chat_ctx=chat_ctx,
         )
         self.avatar = avatar
@@ -81,7 +92,57 @@ class Assistant(Agent):
         return await publish_action(self.ctx, self.avatar, action)
 
 
-async def run_mock(ctx: JobContext):
+class PracticeAssistant(Assistant):
+    def __init__(self, ctx, chat_ctx, avatar, practice_id, flush):
+        super().__init__(ctx, chat_ctx, avatar, INSTRUCTIONS)
+        self.practice_id = practice_id
+        self.flush = flush
+
+    @function_tool
+    async def complete_goal(self, context: RunContext, goal_id: str, evidence: str):
+        """Mark one completed hotel task using exact learner evidence.
+
+        goal_id is reservation, stay, or information, in that order.
+        evidence must quote the learner's English, not your own reply.
+        """
+        await self.flush()
+        return await complete_goal(self.practice_id, goal_id, evidence)
+
+
+def watch_practice(ctx, practice_id, stop):
+    """The worker enforces the deadline and acknowledges persisted final messages."""
+
+    async def monitor():
+        try:
+            while True:
+                async with Session() as db:
+                    item = await db.get(Practice, practice_id)
+                if not item or item.status != "active" or aware(item.expires_at) <= now():
+                    await stop()
+                    await end_practice(practice_id)
+                    await ctx.room.disconnect()
+                    return
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Practice watchdog failed")
+            # Fail closed: a database outage must not leave a paid session running.
+            await stop()
+            await ctx.room.disconnect()
+
+    task = asyncio.create_task(monitor())
+
+    async def shutdown():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await stop()
+        await end_practice(practice_id)
+
+    ctx.add_shutdown_callback(shutdown)
+
+
+async def run_mock(ctx: JobContext, practice_id=None):
     """Real LiveKit room and data streams; deterministic text, no paid model or fake audio."""
     _, avatar = get_avatar(read_options(ctx.job.metadata).avatar_id)
     done = asyncio.Event()
@@ -91,6 +152,8 @@ async def run_mock(ctx: JobContext):
         if participant_identity == ctx.room.local_participant.identity:
             return
         text = await reader.read_all()
+        if len(text) > 4000:
+            return
         await save_message(ctx.room.name, reader.info.stream_id, "user", text)
         await ctx.room.local_participant.set_attributes({"lk.agent.state": "thinking"})
         reply = (
@@ -98,6 +161,20 @@ async def run_mock(ctx: JobContext):
             + text[:500]
             + "。配置模型服务后可启用真实语音对话。"
         )
+        if practice_id:
+            async with Session() as db:
+                item = await db.get(Practice, practice_id)
+            if not item or item.status != "active" or aware(item.expires_at) <= now():
+                return
+            if text == HELP["meaning"]:
+                reply = "我在问你是否要办理入住。Are you checking in?"
+            elif text == HELP["hint"]:
+                import json
+
+                index = min(len(json.loads(item.goals_json)), 2)
+                reply = "你可以试着说：" + GOALS[index]["hint"]
+            else:
+                reply = "Welcome to Willow Hotel! This is a text demo. Try: I'd like to check in. My reservation is under Alex Chen."
         if any(word in text for word in ("动作", "表演", "跳舞")):
             await publish_action(ctx, avatar)
         writer = await ctx.room.local_participant.stream_text(
@@ -126,12 +203,15 @@ async def run_mock(ctx: JobContext):
     await ctx.room.local_participant.set_attributes({"lk.agent.state": "listening"})
 
     async def shutdown():
-        for task in list(tasks):
-            task.cancel()
+        if not practice_id:
+            for task in list(tasks):
+                task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         done.set()
 
     ctx.add_shutdown_callback(shutdown)
+    if practice_id:
+        watch_practice(ctx, practice_id, shutdown)
     # JobContext keeps the job alive after entrypoint returns.
 
 
@@ -162,11 +242,25 @@ async def entrypoint(ctx: JobContext):
     # This timestamp measures entry into the assigned job process separately.
     log_startup("job_entrypoint")
     await init_db()
+    practice_id = read_metadata(ctx.job.metadata).context.get("practice_id")
+    if practice_id is not None:
+        if not isinstance(practice_id, str):
+            raise ValueError("Invalid practice id")
+        await join_practice(practice_id, ctx.room.name)
+        lifecycle = {"watching": False}
+
+        async def failed_startup():
+            if not lifecycle["watching"]:
+                await end_practice(practice_id)
+
+        ctx.add_shutdown_callback(failed_startup)
     config = load_pipeline()
     logger.info("pipeline_configuration", extra=config.summary())
     if config.mode == "mock":
         log_startup("mock_config_loaded")
-        await run_mock(ctx)
+        await run_mock(ctx, practice_id)
+        if practice_id:
+            lifecycle["watching"] = True
         log_startup("mock_ready")
         return
     startup_tracing = install_startup_tracing(ctx.job.id, ctx.room.name)
@@ -184,6 +278,15 @@ async def entrypoint(ctx: JobContext):
     if choices.tts_voice:
         config = config.model_copy(deep=True)
         config.tts, _ = voice_service(config).select(choices.tts_voice)
+    if practice_id:
+        config = config.model_copy(deep=True)
+        # The default ASR profile may force Chinese. Use English for this product.
+        if config.stt.provider in {"openai", "cartesia"}:
+            config.stt.options["language"] = "en"
+        elif config.stt.provider == "huoshan":
+            config.stt.options["language"] = "en-US"
+        config.session.min_endpointing_delay = max(config.session.min_endpointing_delay, 0.8)
+        config.session.max_endpointing_delay = max(config.session.max_endpointing_delay, 2.5)
     logger.info(
         "session_choices",
         extra={
@@ -239,11 +342,30 @@ async def entrypoint(ctx: JobContext):
         await asyncio.gather(*tasks, return_exceptions=True)
 
     ctx.add_shutdown_callback(flush)
-    await session.start(room=ctx.room, agent=Assistant(ctx, chat_ctx, avatar))
+    assistant = (
+        PracticeAssistant(ctx, chat_ctx, avatar, practice_id, flush)
+        if practice_id
+        else Assistant(ctx, chat_ctx, avatar)
+    )
+    await session.start(room=ctx.room, agent=assistant)
     log_startup("session_started")
     await ctx.connect()
     log_startup("room_connected")
-    await session.generate_reply(instructions="用中文简短问候用户。")
+    if practice_id:
+
+        async def stop_practice():
+            await session.aclose()
+            await flush()
+
+        watch_practice(ctx, practice_id, stop_practice)
+        lifecycle["watching"] = True
+    await session.generate_reply(
+        instructions=(
+            "Say exactly: Welcome to Willow Hotel! Are you checking in?"
+            if practice_id
+            else "用中文简短问候用户。"
+        )
+    )
 
 
 if __name__ == "__main__":

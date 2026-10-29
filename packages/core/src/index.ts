@@ -1,5 +1,6 @@
 import { Room, RoomEvent, Track, ParticipantKind, type RemoteParticipant, type RemoteTrack, type RemoteAudioTrack, type RemoteTrackPublication } from 'livekit-client';
 import { TOPICS, parseAvatarCommand, type AvatarCommand } from './protocol.js';
+import { createRoomLogger } from './rtc-logging.js';
 export * from './protocol.js';
 export interface Credentials { server_url: string; participant_token: string }
 export interface Transcript { id: string; role: 'user' | 'agent'; text: string; final: boolean; participantIdentity: string }
@@ -23,6 +24,9 @@ export class AvatarClient {
   private audio = new Map<string, { element: HTMLMediaElement; track: RemoteTrack }>();
   private seenCommands = new Set<string>();
   private disposed = false;
+  private disposePromise?: Promise<void>;
+  private disconnectPromise?: Promise<void>;
+  private roomLogger?: ReturnType<typeof createRoomLogger>;
   private transcriptRevision = 0;
   private transcriptSegments = new Map<string, { revision: number; text: string; final: boolean }>();
   private ownsRoom: boolean;
@@ -31,7 +35,8 @@ export class AvatarClient {
   constructor(options: ClientOptions = {}) {
     this.options = options;
     this.ownsRoom = !options.room;
-    this.room = options.room ?? new Room({ adaptiveStream: true, dynacast: true });
+    if (this.ownsRoom) this.roomLogger = createRoomLogger();
+    this.room = options.room ?? new Room({ adaptiveStream: true, dynacast: true, loggerName: this.roomLogger?.name });
     this.room.on(RoomEvent.ParticipantConnected, this.participantJoined);
     this.room.on(RoomEvent.TrackSubscribed, this.subscribed);
     this.room.on(RoomEvent.TrackUnsubscribed, this.unsubscribed);
@@ -74,7 +79,7 @@ export class AvatarClient {
     state.final = message.final;
     this.options.onTranscript?.(message);
   }
-  private report(e: unknown) { this.options.onError?.(e instanceof Error ? e : new Error(String(e))); }
+  private report(e: unknown) { if (!this.disposed) this.options.onError?.(e instanceof Error ? e : new Error(String(e))); }
   private isAgent(p: RemoteParticipant) { return this.options.agentIdentity ? p.identity === this.options.agentIdentity : p.kind === ParticipantKind.AGENT; }
   private markMilestone(stage: ConnectionMilestone) {
     if (this.disposed || this.milestones.has(stage)) return;
@@ -149,6 +154,7 @@ export class AvatarClient {
   async connect(credentials: Credentials) {
     if (this.disposed) throw new Error('AvatarClient has been disposed');
     this.milestones.clear();
+    this.roomLogger?.connected();
     this.options.onState?.('connecting');
     await this.room.connect(credentials.server_url, credentials.participant_token);
     this.markMilestone('room_connected');
@@ -163,9 +169,18 @@ export class AvatarClient {
     this.options.onTranscript?.({ id: info.id, role: 'user', text, final: true, participantIdentity: this.room.localParticipant.identity });
   }
   async setMicrophone(enabled: boolean) { await this.room.localParticipant.setMicrophoneEnabled(enabled); }
-  async disconnect() { await this.room.disconnect(); this.clearAudio(); }
-  async dispose() {
-    if (this.disposed) return;
+  disconnect(): Promise<void> {
+    if (this.disconnectPromise) return this.disconnectPromise;
+    this.roomLogger?.beginClose();
+    const pending = this.room.disconnect().finally(() => {
+      this.clearAudio();
+      if (this.disconnectPromise === pending) this.disconnectPromise = undefined;
+    });
+    this.disconnectPromise = pending;
+    return pending;
+  }
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
     this.room.off(RoomEvent.ParticipantConnected, this.participantJoined);
     this.room.off(RoomEvent.TrackSubscribed, this.subscribed);
@@ -174,8 +189,13 @@ export class AvatarClient {
     this.room.off(RoomEvent.DataReceived, this.data);
     this.room.off(RoomEvent.Disconnected, this.disconnected);
     if (this.options.manageTranscription !== false) this.room.unregisterTextStreamHandler(TOPICS.transcription);
-    if (this.ownsRoom) await this.room.disconnect();
-    this.transcriptSegments.clear();
-    this.clearAudio();
+    this.disposePromise = (async () => {
+      try { if (this.ownsRoom) await this.disconnect(); }
+      finally {
+        this.transcriptSegments.clear();
+        this.clearAudio();
+      }
+    })();
+    return this.disposePromise;
   }
 }

@@ -7,10 +7,12 @@
     "packages/core",
     "packages/renderer",
     "packages/react",
-    "apps/demo"
+    "apps/demo",
+    "apps/speaking"
   ],
   "scripts": {
     "dev": "npm run dev -w @avatarweave/demo",
+    "dev:speaking": "npm run dev -w @avatarweave/speaking",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "node --test tests/*.test.mjs",

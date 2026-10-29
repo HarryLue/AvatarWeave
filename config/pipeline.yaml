@@ -101,6 +101,15 @@ profiles:
         speed: 1.0
         min_phrase_chars: 12
         max_phrase_chars: 80
+  alibaba-asr-huoshan-tts:
+    llm: *openai_llm
+    stt:
+      provider: alibaba
+      options:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: paraformer-realtime-v2
+        sample_rate: 16000
+    tts: *huoshan_tts
   zhiai:
     llm: *openai_llm
     stt:
