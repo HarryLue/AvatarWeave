@@ -11,7 +11,8 @@ def client():
         yield client
 
 
-def test_token_standard_contract_and_dispatch(client):
+def test_token_standard_contract_and_dispatch(client, monkeypatch):
+    monkeypatch.setattr(settings, "rtc_public_url", "")
     response = client.post(
         "/api/token", json={}, headers={"Authorization": "Bearer test-secret"}
     )
@@ -51,6 +52,29 @@ def test_auth_and_dispatch_restrictions(client):
         == 422
     )
     assert client.get("/api/health").json()["status"] == "ok"
+
+
+def test_token_uses_public_rtc_url(client, monkeypatch):
+    monkeypatch.setattr(settings, "rtc_public_url", "wss://avatar.example/realtime")
+    response = client.post(
+        "/api/token", json={}, headers={
+            "Authorization": "Bearer test-secret",
+            "X-AvatarWeave-RTC-URL": "ws://proxy.example/realtime",
+        }
+    )
+    assert response.status_code == 201
+    assert response.json()["server_url"] == "wss://avatar.example/realtime"
+
+
+@pytest.mark.parametrize("url", ["ws://111.56.189.4/realtime", "wss://avatar.example:8443/realtime"])
+def test_token_uses_nginx_rtc_url(client, monkeypatch, url):
+    monkeypatch.setattr(settings, "rtc_public_url", "")
+    response = client.post("/api/token", json={}, headers={
+        "Authorization": "Bearer test-secret",
+        "X-AvatarWeave-RTC-URL": url,
+    })
+    assert response.status_code == 201
+    assert response.json()["server_url"] == url
 
 
 @pytest.mark.asyncio

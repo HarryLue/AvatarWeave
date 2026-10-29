@@ -1,3 +1,4 @@
+import './browser-crypto';
 import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AvatarClient, type Transcript } from '@avatarweave/core';
@@ -35,6 +36,7 @@ function App() {
   const onReady = useCallback((value: AvatarRenderer | null) => { avatar.current = value; setReady(!!value); }, []);
   const onError = useCallback((e: Error) => setError(e.message), []);
   const connectionLog = useRef<((stage: string, at?: number, details?: Record<string, unknown>) => void) | null>(null);
+  const connectionAttempt = useRef(0);
   const receive = (m: Transcript) => {
     const receivedAt = Date.now();
     setMessages(previous => {
@@ -82,7 +84,8 @@ function App() {
   function selectVoice(value: string) { setVoice(value); try { localStorage.setItem(`avatarweave.voice.${voiceInfo.provider}`, value); } catch { /* Session selection still works. */ } }
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   async function connect() {
-    const attempt = crypto.randomUUID();
+    // This ID only groups diagnostic logs; it must also work on HTTP origins.
+    const attempt = `${Date.now()}-${++connectionAttempt.current}`;
     const started = performance.now();
     let previous = started;
     const stages = new Set<string>();
@@ -121,7 +124,10 @@ function App() {
     finally { setState('disconnected'); setConnected(false); setMic(false); setBusy(false); }
   }
   async function toggleMic() {
-    try { await client.current?.setMicrophone(!mic); setMic(!mic); } catch (e) { onError(e as Error); }
+    try {
+      if (!mic && !navigator.mediaDevices?.getUserMedia) throw new Error('麦克风需要 HTTPS 安全连接，请通过 HTTPS 地址访问。');
+      await client.current?.setMicrophone(!mic); setMic(!mic);
+    } catch (e) { onError(e as Error); }
   }
   async function send(event: React.FormEvent) {
     event.preventDefault();

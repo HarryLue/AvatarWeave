@@ -1,6 +1,7 @@
 import type { Application } from 'pixi.js';
 import type { Live2DModel } from 'pixi-live2d-display/cubism4';
 import type { MotionSync } from 'live2d-motionsync/stream';
+import { AudioEnvelope } from './audio-envelope.js';
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
   coreUrl: string;
@@ -37,6 +38,7 @@ export class AvatarRenderer {
   private app?: Application;
   private model?: Live2DModel;
   private sync?: MotionSync;
+  private envelope?: AudioEnvelope;
   private observer?: ResizeObserver;
   private disposed = false;
   private audio: MediaStream | null = null;
@@ -59,7 +61,17 @@ export class AvatarRenderer {
     if (this.disposed) { model.destroy(); return this; }
     this.model = model;
     this.app.stage.addChild(model);
-    if (this.options.motionSyncUrl) {
+    const supportsAudioProcessing = typeof AudioContext !== 'undefined' && typeof AudioWorkletNode !== 'undefined' && 'audioWorklet' in AudioContext.prototype;
+    if (this.options.motionSyncUrl && !supportsAudioProcessing) {
+      const envelope = this.envelope = new AudioEnvelope();
+      const manager = model.internalModel.motionManager as unknown as { lipSyncIds?: string[] };
+      const parameters = model.internalModel.coreModel as { setParameterValueById(id: string, value: number): void };
+      const mouthIds = manager.lipSyncIds?.length ? manager.lipSyncIds : ['ParamMouthOpenY'];
+      model.internalModel.on('beforeModelUpdate', () => {
+        const level = envelope.readLevel();
+        for (const id of mouthIds) parameters.setParameterValueById(id, level);
+      });
+    } else if (this.options.motionSyncUrl) {
       this.sync = new MotionSync(model.internalModel);
       // Ignore delayed AudioWorklet callbacks after reset/disposal.
       const internals = this.sync as unknown as { _buffer: unknown; onMessage: (event: MessageEvent) => void };
@@ -101,7 +113,11 @@ export class AvatarRenderer {
     this.audioTask = this.audioTask.then(async () => {
       if (this.disposed) return;
       await this.sync?.reset();
-      if (stream && stream === this.audio && !this.disposed) await this.sync?.play(stream);
+      await this.envelope?.reset();
+      if (stream && stream === this.audio && !this.disposed) {
+        await this.sync?.play(stream);
+        await this.envelope?.play(stream);
+      }
     }).catch(e => this.options.onError?.(e instanceof Error ? e : new Error(String(e))));
   }
   async execute(command: { type: 'expression' | 'motion'; name: string; index?: number }) {
@@ -114,13 +130,16 @@ export class AvatarRenderer {
     this.disposed = true;
     this.observer?.disconnect();
     const sync = this.sync;
+    const envelope = this.envelope;
     const app = this.app;
     app?.stop();
     void Promise.resolve(this.initTask).catch(() => {}).then(() => this.audioTask).finally(async () => {
       await sync?.reset();
+      await envelope?.reset();
       app?.destroy(false, { children: true, texture: true, baseTexture: true });
     }).catch(() => {});
     this.sync = undefined;
+    this.envelope = undefined;
     this.audio = null;
     this.app = undefined;
     this.model = undefined;

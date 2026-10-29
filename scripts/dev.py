@@ -149,6 +149,8 @@ def main():
             if (ROOT / ".tools/livekit-server").exists()
             else shutil.which("livekit-server", path=env["PATH"])
         )
+        runtime = ROOT / ".tools/rtc-server"
+        binary = env.get("RTC_BINARY") or (str(runtime) if runtime.exists() else binary)
         binary = binary or ""
         if not Path(binary).exists():
             sys.exit(

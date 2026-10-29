@@ -1,0 +1,7 @@
+{
+  "hosts": ["111.56.189.4"],
+  "email": "",
+  "certificate_name": "avatarweave",
+  "certbot_requirement": "certbot==5.8.0",
+  "fallback_self_signed": true
+}

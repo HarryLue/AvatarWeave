@@ -28,24 +28,31 @@ mkdir -p "$TOOLS_BIN" "$ROOT_DIR/.cache/downloads"
 if [[ "$ACTION" == install || "$ACTION" == up ]]; then
   [[ "$(uname -s)" == Linux ]] || { echo 'This bootstrap targets Linux (amd64/arm64).'; exit 1; }
   case "$(uname -m)" in
-    x86_64) NODE_ARCH=x64; LK_ARCH=amd64 ;;
-    aarch64|arm64) NODE_ARCH=arm64; LK_ARCH=arm64 ;;
+    x86_64) NODE_ARCH=x64; RTC_ARCH=amd64 ;;
+    aarch64|arm64) NODE_ARCH=arm64; RTC_ARCH=arm64 ;;
     *) echo 'Unsupported CPU architecture'; exit 1 ;;
   esac
+  PRIVILEGE=()
+  if [[ "$EUID" != 0 ]]; then
+    command -v sudo >/dev/null || { echo 'Need sudo to deploy the Nginx configuration and frontend.' >&2; exit 1; }
+    PRIVILEGE=(sudo)
+  fi
+  NGINX_BIN="$(command -v nginx || true)"
+  if [[ -z "$NGINX_BIN" && -x /usr/sbin/nginx ]]; then NGINX_BIN=/usr/sbin/nginx; fi
   if [[ "$SKIP_SYSTEM" == 0 ]]; then
     if command -v apt-get >/dev/null; then
-      PRIVILEGE=()
-      if [[ "$EUID" != 0 ]]; then
-        command -v sudo >/dev/null || { echo 'Need sudo for OS packages, or use --skip-system-deps after installing prerequisites.'; exit 1; }
-        PRIVILEGE=(sudo)
-      fi
+      SYSTEM_PACKAGES=(ca-certificates curl tar xz-utils libstdc++6 libgomp1 libportaudio2 ffmpeg espeak-ng openssl cron)
+      if [[ -z "$NGINX_BIN" ]]; then SYSTEM_PACKAGES+=(nginx); fi
       "${PRIVILEGE[@]}" apt-get update
-      "${PRIVILEGE[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl tar xz-utils libstdc++6 libgomp1 libportaudio2 ffmpeg espeak-ng
+      "${PRIVILEGE[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${SYSTEM_PACKAGES[@]}"
     else
-      echo 'Install curl, tar, xz, CA certificates, libstdc++, libgomp, libportaudio and FFmpeg with your OS package manager, then use --skip-system-deps.' >&2
+      echo 'Install nginx, curl, tar, xz, CA certificates, libstdc++, libgomp, libportaudio and FFmpeg with your OS package manager, then use --skip-system-deps.' >&2
       exit 1
     fi
   fi
+  NGINX_BIN="${NGINX_BIN:-$(command -v nginx || true)}"
+  if [[ -z "$NGINX_BIN" && -x /usr/sbin/nginx ]]; then NGINX_BIN=/usr/sbin/nginx; fi
+  [[ -n "$NGINX_BIN" ]] || { echo 'Nginx is required. Install it first, or omit --skip-system-deps.' >&2; exit 1; }
   for tool in curl tar xz sha256sum; do command -v "$tool" >/dev/null || { echo "Missing prerequisite: $tool"; exit 1; }; done
   curl_download() { curl --fail --location --retry 3 --connect-timeout 20 --max-time 600 "$1" -o "$2"; }
   if ! command -v node >/dev/null || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'; then
@@ -64,15 +71,6 @@ if [[ "$ACTION" == install || "$ACTION" == up ]]; then
     curl_download https://astral.sh/uv/0.11.19/install.sh "$ROOT_DIR/.cache/downloads/uv-install.sh"
     UV_UNMANAGED_INSTALL="$TOOLS_BIN" sh "$ROOT_DIR/.cache/downloads/uv-install.sh"
   fi
-  LIVEKIT_VERSION=1.13.11
-  if [[ ! -x "$TOOLS_DIR/livekit-server" ]] || ! "$TOOLS_DIR/livekit-server" --version | awk -v version="$LIVEKIT_VERSION" '$NF==version {found=1} END{exit !found}'; then
-    echo "Installing LiveKit Server $LIVEKIT_VERSION locally..."
-    LIVEKIT_ARCHIVE="livekit_${LIVEKIT_VERSION}_linux_${LK_ARCH}.tar.gz"
-    curl_download "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/$LIVEKIT_ARCHIVE" "$ROOT_DIR/.cache/downloads/$LIVEKIT_ARCHIVE"
-    curl_download "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/checksums.txt" "$ROOT_DIR/.cache/downloads/livekit-checksums.txt"
-    (cd "$ROOT_DIR/.cache/downloads"; awk -v file="$LIVEKIT_ARCHIVE" '$2==file' livekit-checksums.txt > livekit-selected-checksum.txt; test -s livekit-selected-checksum.txt; sha256sum --check livekit-selected-checksum.txt)
-    tar -xzf "$ROOT_DIR/.cache/downloads/$LIVEKIT_ARCHIVE" -C "$TOOLS_DIR" livekit-server
-  fi
   if [[ ! -f .env ]]; then
     cp .env.example .env
     chmod 600 .env
@@ -80,6 +78,8 @@ if [[ "$ACTION" == install || "$ACTION" == up ]]; then
   fi
   # No global Python installation required: uv provisions the project interpreter.
   uv python install 3.11
+  # Install the pinned signaling runtime from the dependency manifest.
+  uv run --no-project --python 3.11 scripts/install-runtime.py --arch "$RTC_ARCH"
   uv sync --locked --project backend --python 3.11 "${EXTRAS[@]}"
   if [[ ${#EXTRAS[@]} == 0 ]]; then
     SELECTED_EXTRAS="$(backend/.venv/bin/python -c 'import sys; sys.path.insert(0,"backend"); from avatarweave_agent.pipeline import load_pipeline,EXTRAS; c=load_pipeline(); print(" ".join(sorted({EXTRAS[s.provider] for s in (c.llm,c.stt,c.tts) if s and s.provider in EXTRAS})))')"
@@ -91,11 +91,44 @@ if [[ "$ACTION" == install || "$ACTION" == up ]]; then
     [[ "$(uname -m)" == x86_64 ]] || { echo 'Kokoro CUDA runtime currently supports Linux x86_64.' >&2; exit 1; }
     uv sync --locked --project backend/kokoro-runtime-gpu --python 3.11
   fi
+  CERTBOT_REQUIREMENT="$(backend/.venv/bin/python -c 'import json; print(json.load(open("infra/https.json"))["certbot_requirement"])')"
+  if [[ ! -x "$TOOLS_DIR/certbot/bin/python" ]]; then uv venv --python 3.11 "$TOOLS_DIR/certbot"; fi
+  uv pip install --index-url https://pypi.org/simple --python "$TOOLS_DIR/certbot/bin/python" "$CERTBOT_REQUIREMENT"
   backend/.venv/bin/python scripts/download-kokoro.py
   export npm_config_cache="$ROOT_DIR/.cache/npm"
   npm ci
   npm run build
   backend/.venv/bin/python scripts/check-config.py
+  # Use a fixed web root so nginx workers need no access to the checkout.
+  "${PRIVILEGE[@]}" install -d -m 755 /var/www/avatarweave /etc/nginx/conf.d /etc/nginx/snippets
+  "${PRIVILEGE[@]}" cp -R apps/demo/dist/. /var/www/avatarweave/
+  "${PRIVILEGE[@]}" chmod -R a+rX /var/www/avatarweave
+  "${PRIVILEGE[@]}" install -m 644 infra/nginx-routes.conf /etc/nginx/snippets/avatarweave-routes.conf
+  "${PRIVILEGE[@]}" install -m 644 infra/nginx.conf /etc/nginx/conf.d/avatarweave.conf
+  # Disable Debian/Ubuntu's default site, preserving it outside sites-enabled/.
+  if [[ -L /etc/nginx/sites-enabled/default && "$(readlink /etc/nginx/sites-enabled/default)" == /etc/nginx/sites-available/default ]]; then
+    "${PRIVILEGE[@]}" mv /etc/nginx/sites-enabled/default /etc/nginx/avatarweave-default-site.backup
+  fi
+  "${PRIVILEGE[@]}" "$NGINX_BIN" -t
+  if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+    "${PRIVILEGE[@]}" systemctl enable nginx
+    if "${PRIVILEGE[@]}" systemctl is-active --quiet nginx; then
+      "${PRIVILEGE[@]}" systemctl reload nginx
+    else
+      "${PRIVILEGE[@]}" systemctl start nginx
+    fi
+  else
+    # SysV/container hosts without a running systemd.
+    "${PRIVILEGE[@]}" service nginx status >/dev/null 2>&1 && NGINX_RUNNING=1 || NGINX_RUNNING=0
+    if [[ "$NGINX_RUNNING" == 1 ]]; then
+      "${PRIVILEGE[@]}" service nginx reload
+    else
+      "${PRIVILEGE[@]}" service nginx start
+    fi
+  fi
+  # HTTP must be serving the ACME challenge before requesting a certificate.
+  "${PRIVILEGE[@]}" "$TOOLS_DIR/certbot/bin/python" scripts/configure-https.py
+  echo 'Nginx ready: / (frontend), /api/ (API), /docs, /realtime/ (signaling); HTTP and HTTPS enabled; hosts/certificates follow infra/https.json.'
   echo 'Installation complete. Existing .env and database were preserved.'
 fi
 case "$ACTION" in

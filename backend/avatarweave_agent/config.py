@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
     database_url: str = f"sqlite+aiosqlite:///{ROOT / 'avatar.db'}"
     livekit_url: str = "ws://127.0.0.1:7880"
+    rtc_public_url: str = ""
     livekit_api_key: str = "devkey"
     livekit_api_secret: str = "avatar-kit-local-development-secret-2026"
     mock_tts_preview: bool = False

@@ -1,0 +1,6 @@
+{
+  "version": "1.13.11",
+  "release_url": "https://github.com/livekit/livekit/releases/download/v{version}",
+  "archive": "livekit_{version}_linux_{arch}.tar.gz",
+  "executable": "livekit-server"
+}

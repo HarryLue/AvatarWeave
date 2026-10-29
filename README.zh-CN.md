@@ -16,18 +16,28 @@ bash scripts/deploy.sh
 脚本安装所需系统依赖、Node.js/uv/Python、LiveKit Server、锁定的前后端依赖及本地模型，然后构建并启动服务。已有 `.env`、数据库和模型缓存保留；`.env` 不存在时创建模板，初次模板为无模型凭证的文字 mock 模式。
 
 ```bash
-bash scripts/deploy.sh install  # 只安装
+bash scripts/deploy.sh install  # 安装、构建并部署 Nginx；应用服务另行 start
 bash scripts/deploy.sh start
 bash scripts/deploy.sh restart
 bash scripts/deploy.sh status
 bash scripts/deploy.sh stop
 ```
 
-可选 `install --skip-system-deps` 和 `install --all-providers`。首次安装需要访问 GitHub、PyPI、npm 等；网络代理使用标准环境变量。日志在 `logs/`。
+可选 `install --skip-system-deps` 和 `install --all-providers`。`--skip-system-deps` 要求已安装 Nginx，仍会部署配置并启动或重载 Nginx，需要 root/sudo 权限。首次安装需要访问 GitHub、PyPI、npm 等；网络代理使用标准环境变量。日志在 `logs/`。
+
+`install`（以及默认 `up`）在缺少 Nginx 时通过 apt 安装，将站点配置 `infra/nginx.conf` 复制到 `/etc/nginx/conf.d/avatarweave.conf`、公共路由 `infra/nginx-routes.conf` 复制到 `/etc/nginx/snippets/avatarweave-routes.conf`，将构建产物复制到 `/var/www/avatarweave/`。脚本将 Debian/Ubuntu 默认站点软链接移至 `/etc/nginx/avatarweave-default-site.backup`，运行 `nginx -t` 后启动或重载 Nginx；systemd 环境同时启用开机启动。重复部署执行相同命令即可。其他已有站点若占用了 `default_server`，需先调整冲突配置。
+
+安装后默认同时启用 `https://服务器地址/` 和 `http://服务器地址/`，不强制跳转。`/api/` 为后端 API，`/docs` 为 API 文档，`/realtime/` 为实时 WebSocket 信令。`RTC_PUBLIC_URL` 建议留空：HTTP 自动使用 `ws`，HTTPS 自动使用 `wss`。仅连接独立信令服务时才需要覆盖这个值；修改 `.env` 后运行 `restart`。
+
+证书和域名配置集中在 `infra/https.json`：`hosts` 为公网 IP 或域名列表，`email` 可填写续期联系邮箱，`fallback_self_signed` 控制申请失败时是否使用自签证书。当前配置使用公网 IP `111.56.189.4`。脚本优先通过 Let’s Encrypt 和 Certbot 的 HTTP-01 验证申请免费可信证书，证书在 `/etc/letsencrypt/live/avatarweave/`；失败时使用 OpenSSL 生成带 IP/域名 SAN 的自签证书，存放在 `/etc/avatarweave/tls/`。自签证书会触发浏览器信任提示，不等同于公开受信任证书。申请过程会接受 Let’s Encrypt 服务条款，空邮箱使用无邮箱账户。
+
+域名接入无需修改业务代码：将域名 A 记录指向服务器，将 `infra/https.json` 的 `hosts` 改为实际域名，然后执行 `bash scripts/deploy.sh install`。脚本自动重新申请证书并生成 `/etc/nginx/conf.d/avatarweave-https.conf`，HTTP 与 HTTPS 共用 `infra/nginx-routes.conf`；无需手动填写证书路径。请开放 TCP 80/443，并继续开放媒体 TCP 17881、UDP 50100–50200。公网 HTTP-01 验证必须能从互联网访问 80 端口。
+
+自动续期通过 `avatarweave-certificate.timer` 每 6 小时检查一次，证书到期前续期并检查、重载 Nginx。使用自签证书时也会重试公开证书申请，成功后自动切换；自签证书临近到期时自动更新。无 systemd 的环境使用 `/etc/cron.d/avatarweave-certificate`。可用 `systemctl list-timers avatarweave-certificate.timer` 和 `journalctl -u avatarweave-certificate.service` 检查续期状态。源码目录和 `.tools/certbot` 需要保留，供定时任务调用。
 
 真实语音在 `.env` 设置 `PIPELINE_MODE=pipeline` 并填写所选 provider 的凭证；`config/pipeline.yaml` 选择组合。`PIPELINE_PROFILE` 可显式覆盖 profile，`PIPELINE_CONFIG` 可指定配置文件。
 
-前端 http://localhost:5174，API 文档 http://localhost:8090/docs。`scripts/dev.py` 只启动已安装的项目，不代替依赖安装。
+部署入口使用配置中的 IP/域名，例如 https://111.56.189.4/，API 文档为对应地址下的 `/docs`；HTTP 同时可用。开发前端仍为 http://localhost:5174，后端直连 http://localhost:8090/docs。`scripts/dev.py` 只启动已安装的项目，不代替依赖安装。
 
 ## SDK 与服务边界
 

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from google.protobuf.json_format import ParseDict
 from livekit import api
@@ -68,7 +68,7 @@ async def health():
 
 
 @app.post("/api/token", status_code=201, dependencies=[Depends(authenticate)])
-async def token(body: TokenRequest):
+async def token(body: TokenRequest, request: Request):
     if len(body.participant_attributes) > 16 or any(
         k.startswith("lk.") or len(k) > 128 or len(v) > 1024
         for k, v in body.participant_attributes.items()
@@ -128,11 +128,15 @@ async def token(body: TokenRequest):
         .with_room_config(room_config)
         .to_jwt()
     )
-    return {
+    response = {
         "server_url": settings.livekit_url,
         "participant_token": jwt,
         "room_name": body.room_name,
     }
+    public_url = settings.rtc_public_url or request.headers.get("x-avatarweave-rtc-url")
+    if public_url:
+        response["server_url"] = public_url
+    return response
 
 
 @app.get("/api/avatars")

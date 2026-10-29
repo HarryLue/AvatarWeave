@@ -15,7 +15,7 @@ bash scripts/deploy.sh
 The script installs system dependencies, Node.js, uv, Python, LiveKit Server, locked frontend and backend dependencies, and local models, then builds and starts the services. Existing `.env` files, databases, and model caches are preserved. If `.env` does not exist, the script creates a template that defaults to text-only mock mode without model credentials.
 
 ```bash
-bash scripts/deploy.sh install  # Install only
+bash scripts/deploy.sh install  # Install, build, and deploy Nginx; start the app separately
 bash scripts/deploy.sh start
 bash scripts/deploy.sh restart
 bash scripts/deploy.sh status
@@ -26,7 +26,17 @@ Installation also supports `install --skip-system-deps` and `install --all-provi
 
 For real voice interaction, set `PIPELINE_MODE=pipeline` in `.env`, provide credentials for the selected providers, and choose a profile in `config/pipeline.yaml`. Use `PIPELINE_PROFILE` to override the profile explicitly, or `PIPELINE_CONFIG` to select a configuration file.
 
-The frontend runs at http://localhost:5174, and API documentation is available at http://localhost:8090/docs. `scripts/dev.py` starts an already installed project; it does not install dependencies.
+The deployed frontend supports HTTPS at the configured IP/domain (initially https://111.56.189.4/), with API documentation under `/docs`; HTTP remains available. Development access remains http://localhost:5174 and http://localhost:8090/docs. `scripts/dev.py` starts an already installed project; it does not install dependencies.
+
+`install` (and the default `up`) installs Nginx through apt if missing, copies `infra/nginx.conf` to `/etc/nginx/conf.d/avatarweave.conf`, installs shared `infra/nginx-routes.conf` as `/etc/nginx/snippets/avatarweave-routes.conf`, and copies the frontend build to `/var/www/avatarweave/`. It moves the Debian/Ubuntu default site symlink to `/etc/nginx/avatarweave-default-site.backup`, checks `nginx -t`, then starts or reloads Nginx. On systemd hosts it also enables Nginx at boot. Repeating `install` updates the deployment. Other sites declaring `default_server` must be adjusted if they conflict. `--skip-system-deps` requires an existing Nginx installation; configuration deployment still requires root/sudo.
+
+Installation enables both HTTPS and HTTP without redirecting HTTP. Nginx serves `/`, `/api/`, `/docs`, and `/realtime/`. Leave `RTC_PUBLIC_URL` empty to follow the current host and protocol (`ws` for HTTP, `wss` for HTTPS).
+
+Configure public IP addresses or domain names in `infra/https.json` (`hosts`, optional contact `email`, and `fallback_self_signed`). The initial host is `111.56.189.4`. Installation requests a free trusted certificate using Certbot and Let's Encrypt HTTP-01 validation, accepting its terms (an empty email registers without email). Public certificates are stored under `/etc/letsencrypt/live/avatarweave/`. If issuance fails and fallback is enabled, OpenSSL creates a self-signed certificate with the configured IP/DNS SANs under `/etc/avatarweave/tls/`. Self-signed certificates require explicit browser trust.
+
+To switch to a domain, point its DNS A record to this server, update `hosts`, and run `bash scripts/deploy.sh install`. No application changes or manual certificate paths are needed. The script generates `/etc/nginx/conf.d/avatarweave-https.conf` from `infra/nginx-tls.conf`; HTTP and HTTPS share `infra/nginx-routes.conf`. Open TCP 80/443 and media TCP 17881/UDP 50100–50200. HTTP-01 validation requires public access to port 80.
+
+The `avatarweave-certificate.timer` checks every six hours, renews certificates when due, and validates/reloads Nginx. A self-signed fallback also retries public issuance and switches automatically when successful. Hosts without systemd use `/etc/cron.d/avatarweave-certificate`. Inspect the timer with `systemctl list-timers avatarweave-certificate.timer` and logs with `journalctl -u avatarweave-certificate.service`. Keep the checkout and `.tools/certbot` available for the renewal job.
 
 ## SDK and service boundaries
 
