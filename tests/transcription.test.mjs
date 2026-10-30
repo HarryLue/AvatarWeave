@@ -68,6 +68,21 @@ test('host-managed mode leaves the current text stream handler alone', async () 
   await host.client.dispose();
 });
 
+test('only the trusted agent can report speech service errors and repeated state changes do not repeat errors', async () => {
+  const errors = [];
+  const f = fixture({onError: error => errors.push(error.message)});
+  const agent = f.room.remoteParticipants.get('agent');
+  agent.isLocal = false;
+  agent.attributes = {'lk.agent.state': 'listening', 'avatarweave.service_error': '语音服务暂时不可用，你可以先看文字回复。'};
+  f.room.emit(RoomEvent.ParticipantAttributesChanged, {}, agent);
+  f.room.emit(RoomEvent.ParticipantAttributesChanged, {}, agent);
+  assert.deepEqual(errors, ['语音服务暂时不可用，你可以先看文字回复。']);
+  const other = {isLocal: false, kind: ParticipantKind.STANDARD, attributes: {'avatarweave.service_error': 'untrusted'}};
+  f.room.emit(RoomEvent.ParticipantAttributesChanged, {}, other);
+  assert.equal(errors.length, 1);
+  await f.client.dispose();
+});
+
 test('only the current action topic is consumed, with strict validation and ID deduplication', async () => {
   const commands=[];
   const f=fixture({renderer:{setAudio(){},execute(command){commands.push(command);}}});

@@ -15,7 +15,10 @@ from livekit import api as livekit_api
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # Exercise the same quota boundaries without depending on deployment allowances.
+    monkeypatch.setattr(settings, "practice_daily_limit", 5)
+    monkeypatch.setattr(settings, "practice_daily_attempt_limit", 25)
     service.signup_windows.clear()
     with TestClient(app) as client:
         yield client
@@ -73,10 +76,77 @@ def test_active_session_daily_quota_and_idempotent_report(client):
     assert report.json()["user_turns"] == 0
     assert report.json()["corrections"] == []
     assert client.post(path + "/report", headers=headers).json() == report.json()
-    for _ in range(4):
+    assert client.get("/api/practice/quota", headers=headers).json()["remaining"] == 5
+    for _ in range(5):
         item = start(client, headers)
+        client.portal.call(
+            save_message,
+            item["credentials"]["room_name"],
+            str(uuid4()),
+            "user",
+            "Hello, I would like to check in.",
+        )
+        client.portal.call(
+            save_message,
+            item["credentials"]["room_name"],
+            str(uuid4()),
+            "assistant",
+            "What is your reservation name?",
+        )
         client.post(f"/api/practice/sessions/{item['id']}/finish", headers=headers)
     assert client.post("/api/practice/sessions", headers=headers).status_code == 429
+    assert client.get("/api/practice/quota", headers=headers).json()["remaining"] == 0
+
+
+def test_failed_connections_and_opening_greeting_do_not_charge_quota(client, monkeypatch):
+    monkeypatch.setattr(settings, "practice_daily_attempt_limit", 6)
+    headers = visitor(client)
+    for _ in range(6):
+        item = start(client, headers)
+        room = item["credentials"]["room_name"]
+        client.portal.call(save_message, room, str(uuid4()), "assistant", "Welcome to the hotel!")
+        client.portal.call(save_message, room, str(uuid4()), "user", "Can you hear me?")
+        client.post(f"/api/practice/sessions/{item['id']}/finish", headers=headers)
+    quota = client.get("/api/practice/quota", headers=headers).json()
+    assert quota["used"] == 0
+    assert quota["remaining"] == 5
+    assert quota["attempts_remaining"] == 0
+    assert client.post("/api/practice/sessions", headers=headers).status_code == 429
+
+
+@pytest.mark.parametrize("exists,status", [(False, 201), (True, 409), (None, 503)])
+def test_restart_orphan_reconciled_against_actual_room(client, monkeypatch, exists, status):
+    headers = visitor(client)
+    previous = start(client, headers)
+    client.portal.call(service.join_practice, previous["id"], previous["credentials"]["room_name"])
+
+    async def lookup(name):
+        assert name == previous["credentials"]["room_name"]
+        return exists
+
+    monkeypatch.setattr(service, "room_exists", lookup)
+    response = client.post("/api/practice/sessions", headers=headers)
+    assert response.status_code == status
+    rows = client.get("/api/practice/sessions", headers=headers).json()
+    old = next(item for item in rows if item["id"] == previous["id"])
+    assert old["status"] == ("ended" if exists is False else "active")
+    assert len(rows) == (2 if exists is False else 1)
+
+
+@pytest.mark.parametrize("exists,status", [(False, "ended"), (None, "ending")])
+def test_pending_connection_grace_and_orphan_finish(client, monkeypatch, exists, status):
+    headers = visitor(client)
+    item = start(client, headers)
+
+    async def absent(name):
+        return exists
+
+    monkeypatch.setattr(service, "room_exists", absent)
+    assert client.post("/api/practice/sessions", headers=headers).status_code == 409
+    client.portal.call(service.join_practice, item["id"], item["credentials"]["room_name"])
+    response = client.post(f"/api/practice/sessions/{item['id']}/finish", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == status
 
 
 def test_help_limits_and_expired_guest(client):

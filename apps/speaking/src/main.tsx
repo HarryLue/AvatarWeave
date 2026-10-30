@@ -3,7 +3,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AvatarClient, type Credentials, type Transcript } from '@avatarweave/core';
 import { AvatarView, type AvatarRenderer } from '@avatarweave/react';
-import { api, asset, publicData, type Practice, type Profile, type Review, type Scenario } from './api';
+import { api, asset, publicData, ApiError, type Practice, type Profile, type Review, type Scenario, type Quota } from './api';
 import './style.css';
 
 const labels: Record<string, string> = {
@@ -11,15 +11,21 @@ const labels: Record<string, string> = {
   connected: '等待伙伴加入…', listening: '轮到你了，慢慢说',
   thinking: 'Alex 正在想一想…', speaking: 'Alex 正在说话…',
 };
+const noReplyMessage = '伙伴暂时没有回复，你可以再说一次或结束并保存。未收到回复的连接不扣次数。';
+
+type ChatMessage = Transcript & { receivedAt: number };
+const messageTime = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 
 function App() {
   const [page, setPage] = useState<'home' | 'practice' | 'review' | 'history'>('home');
   const [scenario, setScenario] = useState<Scenario>();
+  const [quota, setQuota] = useState<Quota>();
   const [profile, setProfile] = useState<Profile>();
   const [practice, setPractice] = useState<Practice>();
+  const [blockedPractice, setBlockedPractice] = useState<Practice>();
   const [records, setRecords] = useState<Practice[]>([]);
   const [review, setReview] = useState<Review>();
-  const [messages, setMessages] = useState<Transcript[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [state, setState] = useState('disconnected');
   const [ready, setReady] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
@@ -37,6 +43,7 @@ function App() {
   const bottom = useRef<HTMLDivElement>(null);
   const reportPending = useRef(false);
   const starting = useRef(false);
+  const awaitingReply = useRef(0);
   const closingId = useRef<string | undefined>(undefined);
   const finalizingId = useRef<string | undefined>(undefined);
   const readyCallback = useCallback((value: AvatarRenderer | null) => {
@@ -45,6 +52,11 @@ function App() {
   }, []);
   const fail = useCallback((reason: unknown) => {
     if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
+  }, []);
+  const refreshQuota = useCallback(async () => {
+    const value = await api<Quota>('/quota');
+    if (mounted.current) setQuota(value);
+    return value;
   }, []);
 
   useEffect(() => {
@@ -62,6 +74,10 @@ function App() {
       void client.current?.dispose();
     };
   }, [fail]);
+
+  useEffect(() => {
+    if (page === 'home') void refreshQuota().catch(fail);
+  }, [page, refreshQuota, fail]);
 
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [messages]);
 
@@ -119,6 +135,10 @@ function App() {
     };
     const timer = setInterval(() => {
       setSeconds(Math.max(0, Math.ceil((new Date(practice.expires_at).getTime() - Date.now()) / 1000)));
+      if (!starting.current && !closingId.current && awaitingReply.current && Date.now() - awaitingReply.current > 20000) {
+        setError(previous => previous || noReplyMessage);
+        awaitingReply.current = 0;
+      }
       if (++ticks % 2 === 0) void poll();
     }, 1000);
     return () => { disposed = true; clearInterval(timer); };
@@ -136,7 +156,9 @@ function App() {
 
   async function start() {
     if (starting.current || !scenario) return;
+    if (quota && (!quota.remaining || !quota.attempts_remaining)) return;
     starting.current = true;
+    setBlockedPractice(undefined);
     closingId.current = undefined;
     setBusy(true); setError(''); setReview(undefined); setMessages([]); setAudioReady(false);
     let created: Practice | undefined;
@@ -145,10 +167,17 @@ function App() {
       onError: fail,
       onConnectionMilestone: stage => { if (stage === 'first_audio_playback') setAudioReady(true); },
       onState: value => { if (mounted.current) { setState(value); if (value === 'disconnected') setMic(false); } },
-      onTranscript: message => setMessages(previous => {
-        const found = previous.some(m => m.id === message.id && m.participantIdentity === message.participantIdentity);
-        return found ? previous.map(m => m.id === message.id && m.participantIdentity === message.participantIdentity ? message : m) : [...previous, message];
-      }),
+      onTranscript: message => {
+        awaitingReply.current = message.role === 'agent' || !message.final ? 0 : Date.now();
+        if (message.role === 'agent') setError(previous => previous === noReplyMessage ? '' : previous);
+        const receivedAt = Date.now();
+        setMessages(previous => {
+          const found = previous.some(m => m.id === message.id && m.participantIdentity === message.participantIdentity);
+          return found
+            ? previous.map(m => m.id === message.id && m.participantIdentity === message.participantIdentity ? { ...message, receivedAt: message.role === 'user' ? receivedAt : m.receivedAt } : m)
+            : [...previous, { ...message, receivedAt }];
+        });
+      },
     });
     client.current = next;
     try {
@@ -162,16 +191,24 @@ function App() {
       stream?.getTracks().forEach(track => track.stop());
       created = await api<Practice & { credentials: Credentials }>('/sessions', 'POST');
       livePractice.current = created; setPractice(created); setPage('practice'); setSeconds(360);
+      awaitingReply.current = Date.now();
       await next.connect((created as Practice & { credentials: Credentials }).credentials);
       if (scenario.mode !== 'mock') { await next.setMicrophone(true); setMic(true); }
     } catch (e) {
       fail(e);
       await next.dispose(); client.current = null;
+      if (e instanceof ApiError && e.status === 409 && !created) {
+        try {
+          const previous = await api<Practice[]>('/sessions');
+          setBlockedPractice(previous.find(item => ['active', 'ending'].includes(item.status)
+            && new Date(item.expires_at).getTime() > Date.now()));
+        } catch (reason) { fail(reason); }
+      }
       if (created) {
         try { const item = await api<Practice>(`/sessions/${created.id}/finish`, 'POST'); setPractice(item); livePractice.current = item; }
         catch (reason) { fail(reason); }
       }
-    } finally { starting.current = false; setBusy(false); }
+    } finally { starting.current = false; setBusy(false); void refreshQuota().catch(fail); }
   }
 
   async function finish() {
@@ -236,23 +273,36 @@ function App() {
   const done = practice?.goals.map(g => g.id) ?? [];
   const usable = practice?.status === 'active' && !['disconnected', 'connecting', 'connected'].includes(state);
   const statusText = practice?.status === 'ending' ? '正在保存对话，请稍候…' : labels[state] ?? state;
-  const visibleMessages = messages.filter(m => !m.text.startsWith('[练习帮助：'));
+  const visibleMessages = messages.map(message => {
+    const helpRequest = message.role === 'user' && message.text.startsWith('[练习帮助：');
+    return {
+      ...message,
+      helpRequest,
+      text: helpRequest
+        ? message.text.includes('请用中文解释') ? '请解释上一句话。' : '给我一点回答提示。'
+        : message.text,
+    };
+  });
+  const quotaResetTime = quota ? new Date(quota.resets_at).toLocaleString('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  }) : '';
 
   return <div className="shell">
     <header className="topbar"><a href="/speaking/" onClick={e => { e.preventDefault(); if (page !== 'practice') setPage('home'); }} className="brand"><span className="brand-icon">✳</span> 开口旅行<span className="beta">BETA</span></a>{page !== 'practice' && <button className="text-button" disabled={busy} onClick={showHistory}>练习记录 ↗</button>}</header>
     {error && <div className="error" role="alert"><span>{error}</span><button aria-label="关闭提示" onClick={() => setError('')}>×</button></div>}
+    {blockedPractice && page === 'home' && <section className="quota-notice" role="status"><strong>还有一场未结束的练习</strong><p>可能在另一个页面中进行。你可以先查看并结束它，再开始新练习。</p><button className="text-button" onClick={() => { setError(''); setBlockedPractice(undefined); void openRecord(blockedPractice); }}>查看并结束上次练习 ↗</button></section>}
     {page === 'home' && <main className="home">
       <section className="intro"><div className="eyebrow">A LITTLE PRACTICE. A BIGGER WORLD.</div><h1>下一站，<br /><span>自信开口。</span></h1><p>和卡通伙伴练一次旅行中的小对话。<br />不用说得完美，先把想法说出来。</p><div className="pills"><span>◷ 约 5 分钟</span><span>初级英语</span><span>中文帮助</span></div></section>
       <section className="postcard"><div className="postcard-top"><span>YOUR FIRST STOP</span><span>01 / HOTEL</span></div><div className="hotel-sign">WILLOW<br /><small>HOTEL & A LITTLE COURAGE</small></div><div className="avatar-scene">{profile && <AvatarView coreUrl={asset(profile.assets.core_url)!} modelUrl={asset(profile.assets.model_url)!} motionSyncUrl={asset(profile.assets.motion_sync_url)} draggable={false} onReady={readyCallback} onError={fail} />}</div><span className="hello-bubble">Welcome!<br /><small>我是你的练习伙伴 Alex</small></span><div className="postcard-bottom"><span>CHECK IN TO YOUR NEXT ADVENTURE</span><span>✦</span></div></section>
-      <section className="task-card"><div className="eyebrow">TODAY'S SMALL ADVENTURE</div><h2>入住一家海外酒店</h2><p>{scenario?.brief ?? '正在准备你的练习…'}</p><ol className="task-list">{scenario?.goals.map((goal, i) => <li key={goal.id}><span>{String(i + 1).padStart(2, '0')}</span>{goal.label}</li>)}</ol><div className="brief-note">预订姓名 <b>Alex Chen</b> · 住宿 <b>2 晚</b></div><button className="primary start" disabled={busy || !scenario || !ready} onClick={start}>{busy ? '正在准备…' : !ready ? '伙伴正在就位…' : '开始我的第一次练习'} <span>↗</span></button><p className="privacy">{scenario?.mode === 'mock' ? '当前为文字演示，语音练习需配置模型服务。' : '开始时将申请麦克风权限；语音会交由模型服务处理。'}<br />保存对话文字用于反馈；本产品不保存原始录音。试用每天 5 次。</p></section>
+      <section className="task-card"><div className="eyebrow">TODAY'S SMALL ADVENTURE</div><h2>入住一家海外酒店</h2><p>{scenario?.brief ?? '正在准备你的练习…'}</p><ol className="task-list">{scenario?.goals.map((goal, i) => <li key={goal.id}><span>{String(i + 1).padStart(2, '0')}</span>{goal.label}</li>)}</ol><div className="brief-note">预订姓名 <b>Alex Chen</b> · 住宿 <b>2 晚</b></div>{quota && <section className={`quota-notice ${!quota.remaining || !quota.attempts_remaining ? 'exhausted' : ''}`} role="status" aria-label="今日练习额度"><strong>{!quota.remaining ? `今天的 ${quota.limit} 次练习已用完` : !quota.attempts_remaining ? '今天的连接尝试次数已用完' : `今天还可练 ${quota.remaining} 次，共 ${quota.limit} 次`}</strong><p>一次练习中的多轮对话只计 1 次，未收到回复不扣次数。</p>{(!quota.remaining || !quota.attempts_remaining) && <p className="quota-reset">将于 {quotaResetTime} 恢复（按你设备的当地时间）。</p>}</section>}<button className="primary start" disabled={busy || !scenario || !ready || (!!quota && (!quota.remaining || !quota.attempts_remaining))} onClick={start}>{busy ? '正在准备…' : !ready ? '伙伴正在就位…' : quota && !quota.remaining ? '今天的次数已用完' : quota && !quota.attempts_remaining ? '今天连接次数已用完' : '开始我的第一次练习'} <span>↗</span></button><p className="privacy">{scenario?.mode === 'mock' ? '当前为文字演示，语音练习需配置模型服务。' : '开始时将申请麦克风权限；语音会交由模型服务处理。'}<br />保存对话文字用于反馈；本产品不保存原始录音。</p></section>
     </main>}
     {page === 'practice' && <main className="practice-page">
       <div className="practice-heading"><div><div className="eyebrow">HOTEL CHECK-IN</div><h1>和 Alex 练习入住</h1></div><span className="timer">{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span></div>
       <div className="practice-layout"><section className="practice-stage" data-audio-ready={audioReady}><div className="stage-caption">WILLOW HOTEL <span>前台 · Alex</span></div><div className="practice-avatar">{profile && <AvatarView coreUrl={asset(profile.assets.core_url)!} modelUrl={asset(profile.assets.model_url)!} motionSyncUrl={asset(profile.assets.motion_sync_url)} draggable={false} onReady={readyCallback} onError={fail} />}</div><div className="state"><i className={usable ? 'online' : ''} />{statusText}</div></section>
       <section className="conversation"><div className="progress-label">今天的三个小目标 <b>{done.length}/3</b></div><ul className="goal-list">{scenario?.goals.map(goal => <li key={goal.id} className={done.includes(goal.id) ? 'done' : ''}><span>{done.includes(goal.id) ? '✓' : '○'}</span>{goal.label}</li>)}</ul>
-        <div className="transcripts" aria-live="polite">{!visibleMessages.length && <p className="empty">{scenario?.mode === 'mock' ? '文字演示模式：在下方输入一句英语开始。' : 'Alex 会先向你问好。放轻松，慢慢说。'}</p>}{visibleMessages.map(message => <div className={`bubble ${message.role}`} key={`${message.participantIdentity}:${message.id}`}><small>{message.role === 'user' ? '你' : 'Alex'}</small><p>{message.text}{!message.final && <span className="cursor">▍</span>}</p></div>)}<div ref={bottom} /></div>
+        <div className="transcripts" aria-live="polite">{!visibleMessages.length && <p className="empty">{scenario?.mode === 'mock' ? '文字演示模式：在下方输入一句英语开始。' : 'Alex 会先向你问好。放轻松，慢慢说。'}</p>}{visibleMessages.map(message => <div className={`bubble ${message.role}`} key={`${message.participantIdentity}:${message.id}`}><small>{message.role === 'user' ? message.helpRequest ? '你 · 请求帮助' : '你' : 'Alex'}</small><p>{message.text}{!message.final && <span className="cursor">▍</span>}</p><time className="message-time" dateTime={new Date(message.receivedAt).toISOString()} title={new Date(message.receivedAt).toLocaleString('zh-CN')}>{messageTime.format(message.receivedAt)}</time></div>)}<div ref={bottom} /></div>
         <div className="help-row"><button disabled={!usable || helpBusy || busy} onClick={() => help('meaning')}>这句话什么意思？</button><button disabled={!usable || helpBusy || busy} onClick={() => help('hint')}>给我一点提示 ✧</button></div>
-        <form className="composer" onSubmit={send}><input aria-label="输入英语消息" value={text} onChange={e => setText(e.target.value)} maxLength={1000} disabled={!usable || busy} placeholder="也可以输入英语…" /><button aria-label="发送" disabled={!usable || busy || !text.trim()}>↑</button></form>
+        {scenario?.mode !== 'mock' && <button className="text-button" disabled={!usable || busy} onClick={() => { void client.current?.room.startAudio().catch(fail); }}>听不到？点击开启声音</button>}<form className="composer" onSubmit={send}><input aria-label="输入英语消息" value={text} onChange={e => setText(e.target.value)} maxLength={1000} disabled={!usable || busy} placeholder="也可以输入英语…" /><button aria-label="发送" disabled={!usable || busy || !text.trim()}>↑</button></form>
         <div className="call-controls"><button className={`mic ${mic ? 'enabled' : ''}`} disabled={!usable || busy || scenario?.mode === 'mock'} onClick={toggleMic}>{mic ? '麦克风已开启' : '开启麦克风'}</button><button className="primary" disabled={busy || practice?.status === 'ending'} onClick={finish}>{busy || practice?.status === 'ending' ? '正在保存…' : done.length === 3 ? '完成练习，看看反馈 ↗' : '结束并查看反馈'}</button></div>
       </section></div><p className="fineprint">先表达，再完善。需要思考时可以停一下；每次练习最多 6 分钟。</p>
     </main>}

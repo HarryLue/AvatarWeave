@@ -27,6 +27,7 @@ export class AvatarClient {
   private disposePromise?: Promise<void>;
   private disconnectPromise?: Promise<void>;
   private roomLogger?: ReturnType<typeof createRoomLogger>;
+  private lastServiceError = '';
   private transcriptRevision = 0;
   private transcriptSegments = new Map<string, { revision: number; text: string; final: boolean }>();
   private ownsRoom: boolean;
@@ -87,6 +88,9 @@ export class AvatarClient {
     this.options.onConnectionMilestone?.(stage, performance.now());
   }
   private agentState(p: RemoteParticipant) {
+    const serviceError = p.attributes['avatarweave.service_error'] ?? '';
+    if (serviceError && serviceError !== this.lastServiceError) this.report(new Error(serviceError));
+    this.lastServiceError = serviceError;
     const state = p.attributes['lk.agent.state'];
     if (state && ['listening', 'thinking', 'speaking'].includes(state)) this.markMilestone('agent_ready');
     this.options.onState?.(state ?? 'connected');
@@ -144,7 +148,7 @@ export class AvatarClient {
       this.options.onCommand?.(command);
     } catch (e) { this.report(e); }
   };
-  private disconnected = () => { this.transcriptSegments.clear(); this.clearAudio(); this.options.onState?.('disconnected'); };
+  private disconnected = () => { this.lastServiceError = ''; this.transcriptSegments.clear(); this.clearAudio(); this.options.onState?.('disconnected'); };
   private clearAudio() {
     for (const timer of this.audioChecks.values()) clearTimeout(timer);
     this.audioChecks.clear();

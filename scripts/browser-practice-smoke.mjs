@@ -37,6 +37,20 @@ try {
   await start.waitFor({ timeout: 60000 });
   await page.screenshot({ path: `${artifacts}/practice-home-mobile.png`, fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  // A pending practice from another page must be recoverable instead of a dead-end 409.
+  await page.waitForFunction(() => !!localStorage.getItem('avatarweave.practice.guest'));
+  const pending = await page.evaluate(async () => {
+    const response = await fetch('/api/practice/sessions', {method: 'POST', headers: {
+      Authorization: `Bearer ${localStorage.getItem('avatarweave.practice.guest')}`,
+    }});
+    return {status: response.status};
+  });
+  assert.equal(pending.status, 201);
+  await start.click();
+  await page.getByRole('button', {name: '查看并结束上次练习'}).click({timeout: 15000});
+  await page.getByRole('button', {name: '结束并查看反馈', exact: true}).click();
+  await page.getByRole('heading', {name: '这次练得怎么样'}).waitFor({timeout: 20000});
+  await page.getByRole('button', {name: '再练一次'}).click();
   await start.click();
   await page.getByText('轮到你了，慢慢说', { exact: true }).waitFor({ timeout: 45000 });
   if (pipeline) await page.locator('.practice-stage[data-audio-ready="true"]').waitFor({ timeout: 45000 });
@@ -91,12 +105,13 @@ try {
   assert.ok(await page.evaluate(() => window.__forced1006Count > 0), 'the close regression must exercise a 1006 event');
   await page.screenshot({ path: `${artifacts}/practice-review-mobile.png`, fullPage: true });
   await page.getByRole('button', { name: '查看练习记录', exact: true }).click();
-  await page.getByRole('button', { name: /酒店入住练习/ }).waitFor();
+  await page.getByRole('button', { name: /酒店入住练习/ }).first().waitFor();
   await page.reload();
   await page.getByRole('button', { name: '练习记录' }).click();
-  const record = page.getByRole('button', { name: /酒店入住练习/ });
+  const allRecords = page.getByRole('button', { name: /酒店入住练习/ });
+  const record = allRecords.first();
   await record.waitFor();
-  assert.equal(await record.count(), 1);
+  assert.equal(await allRecords.count(), 2);
   await record.click();
   await page.getByRole('heading', { name: '这次练得怎么样' }).waitFor();
   assert.deepEqual(errors, []);
@@ -121,6 +136,17 @@ try {
   await deniedPage.getByRole('alert').filter({ hasText: '麦克风权限被拒绝' }).waitFor();
   assert.equal(createdSessions, 0, 'Denied microphone must not consume a practice');
   await denied.close();
+
+  const exhausted = await browser.newContext({ viewport: { width: 393, height: 852 } });
+  const exhaustedPage = await exhausted.newPage();
+  await exhaustedPage.route('**/api/practice/quota', route => route.fulfill({json: {
+    limit: 5, used: 5, remaining: 0, attempts_remaining: 20, resets_at: new Date().toISOString(),
+  }}));
+  await exhaustedPage.goto(url);
+  const limitButton = exhaustedPage.getByRole('button', {name: '今天的次数已用完'});
+  await limitButton.waitFor({timeout: 60000});
+  assert.equal(await limitButton.isDisabled(), true, 'Exhausted quota must be visible before a failing POST');
+  await exhausted.close();
   console.log(`PASS: ${finishOnly ? 'finish-only regression' : 'complete practice'}, real room, mobile avatar, text streams, persisted finish, delayed-poll race, Safari-like 1006 shutdown, report retry, history reload, microphone denial; zero page or signal errors`);
 } finally {
   await browser.close();

@@ -10,7 +10,8 @@ export type Practice = {
   id: string; status: string; created_at: string; expires_at: string;
   goals: Evidence[]; help_count: number; report: Review | null;
 };
-export type Scenario = { title: string; brief: string; goals: Goal[]; mode: string };
+export type Scenario = { title: string; brief: string; goals: Goal[]; mode: string; daily_limit: number };
+export type Quota = { limit: number; used: number; remaining: number; attempts_remaining: number; resets_at: string };
 export type Profile = { name: string; assets: { core_url: string; model_url: string; motion_sync_url?: string } };
 
 export class ApiError extends Error {

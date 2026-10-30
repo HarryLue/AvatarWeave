@@ -15,6 +15,7 @@ from livekit.agents import (
     cli,
     function_tool,
     llm,
+    room_io,
 )
 
 from .avatars import get_avatar
@@ -300,6 +301,33 @@ async def entrypoint(ctx: JobContext):
     log_startup("session_created")
     tasks: set[asyncio.Task] = set()
 
+    @session.on("error")
+    def on_service_error(event):
+        if not practice_id:
+            return
+        if getattr(event.error, "recoverable", False):
+            return  # Let SDK retries finish before showing a failure to the learner.
+        kind = getattr(event.error, "type", "")
+        messages = {
+            "tts_error": "语音服务暂时不可用，本轮回复无法播放，请稍后重试。",
+            "llm_error": "伙伴暂时无法生成回复，请稍后重试；未收到回复的练习不扣次数。",
+            "stt_error": "暂时无法识别语音，你可以先用文字输入，稍后再开启麦克风。",
+        }
+        if kind not in messages:
+            return
+        # Send only user-facing messages; provider exceptions can contain sensitive details.
+        task = asyncio.create_task(
+            ctx.room.local_participant.set_attributes({"avatarweave.service_error": messages[kind]})
+        )
+        tasks.add(task)
+
+        def complete(t):
+            tasks.discard(t)
+            if not t.cancelled() and t.exception():
+                logger.warning("Could not publish service status", exc_info=t.exception())
+
+        task.add_done_callback(complete)
+
     @session.on("metrics_collected")
     def on_metrics(event):
         metric = event.metrics
@@ -347,7 +375,15 @@ async def entrypoint(ctx: JobContext):
         if practice_id
         else Assistant(ctx, chat_ctx, avatar)
     )
-    await session.start(room=ctx.room, agent=assistant)
+    await session.start(
+        room=ctx.room,
+        agent=assistant,
+        room_options=room_io.RoomOptions(
+            text_output=room_io.TextOutputOptions(sync_transcription=True)
+        )
+        if practice_id
+        else room_io.RoomOptions(),
+    )
     log_startup("session_started")
     await ctx.connect()
     log_startup("room_connected")

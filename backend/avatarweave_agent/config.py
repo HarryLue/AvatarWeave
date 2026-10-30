@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     agent_http_proxy: str | None = None
     agent_name: str = "avatar-assistant"
     agent_health_port: int = Field(default=8091, ge=1, le=65535)
+    practice_daily_limit: int = Field(default=50, ge=1, le=10000)
+    practice_daily_attempt_limit: int = Field(default=250, ge=1, le=10000)
     api_access_key: str = ""
     allowed_agents: str = "avatar-assistant"
     agent_instructions: str = "你是一位友好的中文数字人助手。用简短、自然的口语回答。"
@@ -39,9 +41,7 @@ class Settings(BaseSettings):
             self.database_url = self.database_url.replace(
                 "postgresql://", "postgresql+asyncpg://", 1
             )
-        if not self.database_url.startswith(
-            ("sqlite+aiosqlite://", "postgresql+asyncpg://")
-        ):
+        if not self.database_url.startswith(("sqlite+aiosqlite://", "postgresql+asyncpg://")):
             raise ValueError("DATABASE_URL must use SQLite or PostgreSQL async driver")
         return self
 
