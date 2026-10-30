@@ -30,18 +30,20 @@ GOALS = [
     {
         "id": "reservation",
         "label": "说明入住来意和预订姓名",
-        "hint": "I'd like to check in. My reservation is under Alex Chen.",
+        "hint": "I'd like to check in. My reservation is under Jamie Chen.",
     },
     {"id": "stay", "label": "确认住宿晚数", "hint": "I'm staying for two nights."},
     {"id": "information", "label": "询问早餐或退房时间", "hint": "What time is breakfast?"},
 ]
 HELP = {
     "meaning": "[练习帮助：请用中文解释你刚才的问题，再用简单英语重复。不要替我完成任务。]",
-    "hint": "[练习帮助：请给我一句当前任务的英语回答提示，附中文意思，然后等我自己说。]",
+    "hint": "[练习帮助：请只给当前任务的英语句子开头和中文意思，不给完整答案。然后邀请我自己说，等我回答。]",
+    "hint_full": "[练习帮助：请给当前任务的一句完整例句和中文意思，然后邀请我用自己的声音说一遍，等我回答。]",
+    "replay": "[练习帮助：请原样重复你最近一条包含英语的回复中的英语句子，不添加解释或新问题，然后等我回答。]",
 }
 INSTRUCTIONS = """You are Alex, a friendly cartoon receptionist at Willow Hotel.
 The learner is an adult Chinese-speaking beginner practicing hotel check-in (A1-A2).
-Scenario facts: reservation name Alex Chen; two nights; breakfast 7–10 AM;
+Scenario facts: reservation name Jamie Chen; two nights; breakfast 7–10 AM;
 checkout 11 AM. Accept other plausible names and stay lengths if the learner chooses.
 Start with: 'Welcome to Willow Hotel! Are you checking in?'
 Speak brief simple English, one question at a time, usually under 35 words.
@@ -135,7 +137,7 @@ async def scenario():
         "goals": GOALS,
         "mode": load_pipeline().mode,
         "daily_limit": settings.practice_daily_limit,
-        "brief": "你是 Alex Chen，预订了两晚住宿。试着用英语办理入住，并询问早餐或退房时间。",
+        "brief": "你是 Jamie Chen，预订了两晚住宿。试着用英语办理入住，并询问早餐或退房时间。",
     }
 
 
@@ -290,6 +292,15 @@ async def start(request: Request, guest_id: str = Depends(guest)):
             status="active",
         )
         db.add(item)
+    try:
+        credentials = await practice_credentials(item, guest_id, request)
+    except Exception:
+        await end_practice(item.id)
+        raise
+    return {**describe(item), "credentials": credentials}
+
+
+async def practice_credentials(item, guest_id, request):
     # Use only server-owned room, identity, agent and scene. No shared API key in the H5.
     from .api import TokenRequest, token
     from .config import settings
@@ -306,12 +317,27 @@ async def start(request: Request, guest_id: str = Depends(guest)):
             ]
         },
     )
-    try:
-        credentials = await token(body, request)
-    except Exception:
-        await end_practice(item.id)
-        raise
-    return {**describe(item), "credentials": credentials}
+    return await token(body, request)
+
+
+@router.post("/sessions/{practice_id}/resume")
+async def resume(practice_id: str, request: Request, guest_id: str = Depends(guest)):
+    item = await owned(practice_id, guest_id)
+    if item.status != "active" or aware(item.expires_at) <= now():
+        raise HTTPException(410, "上次练习已经结束或超时，请重新开始一场练习")
+    if item.joined_at is not None:
+        exists = await room_exists(item.room)
+        if exists is None:
+            raise HTTPException(503, "暂时无法恢复连接，请稍后点击回到上次练习重试")
+        if not exists:
+            await end_practice(item.id)
+            raise HTTPException(410, "上次练习的连接已结束，请重新开始一场练习")
+    credentials = await practice_credentials(item, guest_id, request)
+    return {
+        **describe(item),
+        "messages": await get_messages(item.room, limit=200),
+        "credentials": credentials,
+    }
 
 
 @router.get("/sessions/{practice_id}")
@@ -344,7 +370,7 @@ async def finish(practice_id: str, guest_id: str = Depends(guest)):
 
 class HelpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["meaning", "hint"]
+    kind: Literal["meaning", "hint", "hint_full", "replay"]
 
 
 @router.post("/sessions/{practice_id}/help")

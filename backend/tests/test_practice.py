@@ -50,6 +50,7 @@ def test_guest_auth_isolation_and_server_owned_dispatch(client):
     for suffix, method in [
         ("", "get"),
         ("/finish", "post"),
+        ("/resume", "post"),
         ("/report", "post"),
         ("/help", "post"),
     ]:
@@ -154,10 +155,10 @@ def test_help_limits_and_expired_guest(client):
     item = start(client, headers)
     path = f"/api/practice/sessions/{item['id']}/help"
     assert client.post(path, headers=headers, json={"kind": "arbitrary"}).status_code == 422
-    for _ in range(12):
-        result = client.post(path, headers=headers, json={"kind": "hint"})
+    for kind in ["meaning", "hint", "hint_full", "replay"] * 3:
+        result = client.post(path, headers=headers, json={"kind": kind})
         assert result.status_code == 200
-        assert result.json()["message"] == service.HELP["hint"]
+        assert result.json()["message"] == service.HELP[kind]
     assert client.post(path, headers=headers, json={"kind": "hint"}).status_code == 409
 
 
@@ -322,3 +323,64 @@ def test_deadline_watchdog_flushes_before_end(client):
         await context.callbacks[0]()
 
     client.portal.call(exercise)
+
+
+def test_resume_preserves_identity_history_time_and_quota(client):
+    headers = visitor(client)
+    item = start(client, headers)
+    room = item["credentials"]["room_name"]
+    client.portal.call(save_message, room, str(uuid4()), "user", "I am Jamie Chen.")
+    quota = client.get("/api/practice/quota", headers=headers).json()
+    response = client.post(f"/api/practice/sessions/{item['id']}/resume", headers=headers)
+    assert response.status_code == 200
+    resumed = response.json()
+    assert resumed["id"] == item["id"]
+    assert resumed["expires_at"] == item["expires_at"]
+    assert resumed["credentials"]["room_name"] == room
+    assert resumed["messages"][0]["text"] == "I am Jamie Chen."
+    assert client.get("/api/practice/quota", headers=headers).json() == quota
+    assert len(client.get("/api/practice/sessions", headers=headers).json()) == 1
+    client.post(f"/api/practice/sessions/{item['id']}/finish", headers=headers)
+    assert (
+        client.post(f"/api/practice/sessions/{item['id']}/resume", headers=headers).status_code
+        == 410
+    )
+
+
+@pytest.mark.parametrize("exists,expected", [(True, 200), (False, 410), (None, 503)])
+def test_resume_joined_practice_checks_room_without_creating_another(
+    client, monkeypatch, exists, expected
+):
+    headers = visitor(client)
+    item = start(client, headers)
+    client.portal.call(service.join_practice, item["id"], item["credentials"]["room_name"])
+
+    async def room_exists(name):
+        return exists
+
+    monkeypatch.setattr(service, "room_exists", room_exists)
+    response = client.post(f"/api/practice/sessions/{item['id']}/resume", headers=headers)
+    assert response.status_code == expected
+    records = client.get("/api/practice/sessions", headers=headers).json()
+    assert len(records) == 1
+    assert records[0]["status"] == ("ended" if exists is False else "active")
+
+
+def test_expired_active_snapshot_cannot_resume_or_extend_time(client):
+    headers = visitor(client)
+    item = start(client, headers)
+
+    async def expire():
+        async with Session.begin() as db:
+            await db.execute(
+                update(Practice)
+                .where(Practice.id == item["id"])
+                .values(expires_at=service.now() - timedelta(seconds=1))
+            )
+
+    client.portal.call(expire)
+    response = client.post(f"/api/practice/sessions/{item['id']}/resume", headers=headers)
+    assert response.status_code == 410
+    records = client.get("/api/practice/sessions", headers=headers).json()
+    assert len(records) == 1
+    assert records[0]["report"] is None

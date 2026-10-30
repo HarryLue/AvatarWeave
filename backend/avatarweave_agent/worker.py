@@ -32,6 +32,7 @@ from .practice import (
     join_practice,
     now,
 )
+from .practice_voice import practice_text_input
 from .protocol import COMMAND_TOPIC, make_command
 from .session_options import read_metadata, read_options
 from .startup_tracing import install_startup_tracing
@@ -169,13 +170,31 @@ async def run_mock(ctx: JobContext, practice_id=None):
                 return
             if text == HELP["meaning"]:
                 reply = "我在问你是否要办理入住。Are you checking in?"
-            elif text == HELP["hint"]:
+            elif text in (HELP["hint"], HELP["hint_full"]):
                 import json
 
                 index = min(len(json.loads(item.goals_json)), 2)
-                reply = "你可以试着说：" + GOALS[index]["hint"]
+                reply = (
+                    "你可以试着说："
+                    + (
+                        GOALS[index]["hint"]
+                        if text == HELP["hint_full"]
+                        else ["I'd like to…", "I'm staying for…", "What time is…"][index]
+                    )
+                    + " 现在试着自己说一遍。"
+                )
+            elif text == HELP["replay"]:
+                history = await get_messages(ctx.room.name)
+                reply = next(
+                    (
+                        message["text"]
+                        for message in reversed(history)
+                        if message["role"] == "assistant"
+                    ),
+                    "Welcome to Willow Hotel! Are you checking in?",
+                )
             else:
-                reply = "Welcome to Willow Hotel! This is a text demo. Try: I'd like to check in. My reservation is under Alex Chen."
+                reply = "Welcome to Willow Hotel! This is a text demo. Try: I'd like to check in. My reservation is under Jamie Chen."
         if any(word in text for word in ("动作", "表演", "跳舞")):
             await publish_action(ctx, avatar)
         writer = await ctx.room.local_participant.stream_text(
@@ -379,7 +398,8 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
         agent=assistant,
         room_options=room_io.RoomOptions(
-            text_output=room_io.TextOutputOptions(sync_transcription=True)
+            text_output=room_io.TextOutputOptions(sync_transcription=True),
+            text_input=room_io.TextInputOptions(text_input_cb=practice_text_input(ctx.room.name)),
         )
         if practice_id
         else room_io.RoomOptions(),

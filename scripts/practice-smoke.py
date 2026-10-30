@@ -19,6 +19,7 @@ def main():
     # Fail before launching anything rather than accidentally testing an existing dev server.
     for port in (17890, 17891, 8095, 8096, 5176):
         with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
     directory = Path(tempfile.mkdtemp(prefix="avatarweave-practice-smoke-"))
     config = directory / "livekit.yaml"

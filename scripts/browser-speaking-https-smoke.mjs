@@ -30,7 +30,12 @@ try {
   assert.equal(start.status(), 201);
   const practice = await start.json();
   try {
-    const rtc = new URL(practice.credentials.server_url);
+    const resumed = await context.request.post(`${origin}/api/practice/sessions/${practice.id}/resume`, { headers });
+    assert.equal(resumed.status(), 200);
+    const samePractice = await resumed.json();
+    assert.equal(samePractice.id, practice.id);
+    assert.equal(samePractice.expires_at, practice.expires_at);
+    const rtc = new URL(samePractice.credentials.server_url);
     assert.equal(rtc.protocol, 'wss:');
     assert.equal(rtc.host, new URL(origin).host);
     assert.equal(rtc.pathname.replace(/\/$/, ''), '/realtime');
@@ -38,6 +43,8 @@ try {
     const finish = await context.request.post(`${origin}/api/practice/sessions/${practice.id}/finish`, { headers });
     assert.equal(finish.status(), 200);
     assert.equal((await finish.json()).status, 'ended');
+    const closedResume = await context.request.post(`${origin}/api/practice/sessions/${practice.id}/resume`, { headers });
+    assert.equal(closedResume.status(), 410);
   }
   assert.deepEqual(errors, []);
   console.log('PASS: trusted HTTPS, mobile avatar, secure microphone API, speaking routes, original Demo, same-origin API and WSS credentials; zero page errors. No model conversation started.');
