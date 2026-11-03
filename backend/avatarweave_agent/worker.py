@@ -137,6 +137,10 @@ async def run_mock(ctx: JobContext):
 
 @server.rtc_session(agent_name=settings.agent_name)
 async def entrypoint(ctx: JobContext):
+    # P1 establishes private ownership/storage but does not yet enable private
+    # voice execution. Never send its content to the legacy room-history writer.
+    if ctx.room.name.startswith("vm-"):
+        raise RuntimeError("Private voice sessions await verified P3/P5 integration")
     started = previous = perf_counter()
     previous_stage = None
 

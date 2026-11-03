@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1180" viewBox="0 0 1440 1180" role="img" aria-labelledby="title desc">
+<title id="title">剧情式自适应口语 产品方案总图</title><desc id="desc">目标用户：有近期出境计划、读写尚可但开口困难的成年人｜首轮验证：迁移、复用、真实付费</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#67859a"/></marker></defs>
+<style>text { font-family: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill:#183347; } .title {font-size:34px;font-weight:700} .sub {font-size:18px;fill:#526d80} .label {font-size:17px;font-weight:700;fill:#527083} .head {font-size:22px;font-weight:700} .body {font-size:18px;fill:#39586d} .small {font-size:16px;fill:#526d80} .tag {font-size:15px;font-weight:700;fill:#137767}</style>
+<rect width="1440" height="1180" fill="#f4f7fa"/>
+<rect width="1440" height="8" fill="#148675"/>
+<text x="40" y="64" class="title">剧情式自适应口语 产品方案总图</text>
+<text x="40" y="103" class="sub">目标用户：有近期出境计划、读写尚可但开口困难的成年人｜首轮验证：迁移、复用、真实付费</text>
+<rect x="40" y="132" width="1360" height="88" rx="16" fill="#e4f3ee" stroke="#d8e3ea"/>
+<rect x="40" y="150" width="5" height="30" rx="2" fill="#148675"/>
+<text x="62" y="173" class="head">用户承诺：每天五分钟，在连续故事里练会真实交流</text>
+<text x="62" y="199" class="small">首版：一个固定搭档 · 一个海外生活主题 · 七章骨架 · 四项沟通能力 · 先用手机网页验证</text>
+<text x="40" y="255" class="label">01 体验闭环</text>
+<rect x="40" y="276" width="210" height="135" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="40" y="294" width="5" height="30" rx="2" fill="#148675"/>
+<text x="62" y="317" class="head">选择目标</text>
+<text x="62" y="355" class="body">用途与时间</text>
+<text x="62" y="384" class="body">首章观察起点</text>
+<path d="M251 343 H266" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="270" y="276" width="210" height="135" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="270" y="294" width="5" height="30" rx="2" fill="#148675"/>
+<text x="292" y="317" class="head">今日任务</text>
+<text x="292" y="355" class="body">明确沟通目标</text>
+<text x="292" y="384" class="body">解释推荐原因</text>
+<path d="M481 343 H496" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="500" y="276" width="210" height="135" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="500" y="294" width="5" height="30" rx="2" fill="#148675"/>
+<text x="522" y="317" class="head">角色开场</text>
+<text x="522" y="355" class="body">Live2D 与语音</text>
+<text x="522" y="384" class="body">短旁白进入情境</text>
+<path d="M711 343 H726" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="730" y="276" width="210" height="135" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="730" y="294" width="5" height="30" rx="2" fill="#148675"/>
+<text x="752" y="317" class="head">任务对话</text>
+<text x="752" y="355" class="body">多轮交流与追问</text>
+<text x="752" y="384" class="body">可请求分级提示</text>
+<path d="M941 343 H956" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="960" y="276" width="210" height="135" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="960" y="294" width="5" height="30" rx="2" fill="#148675"/>
+<text x="982" y="317" class="head">具体反馈</text>
+<text x="982" y="355" class="body">引用真实原话</text>
+<text x="982" y="384" class="body">最多两条建议</text>
+<path d="M1171 343 H1186" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="1190" y="276" width="210" height="135" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="1190" y="294" width="5" height="30" rx="2" fill="#148675"/>
+<text x="1212" y="317" class="head">选择下一步</text>
+<text x="1212" y="355" class="body">重试或下一章</text>
+<text x="1212" y="384" class="body">保存进度再回来</text>
+<text x="40" y="456" class="label">02 规划核心：学习状态与故事状态分别记录，场景规划器负责组合</text>
+<rect x="40" y="480" width="420" height="184" rx="16" fill="#eef4ff" stroke="#d8e3ea"/>
+<rect x="40" y="498" width="5" height="30" rx="2" fill="#597bc2"/>
+<text x="62" y="521" class="head">学习状态</text>
+<text x="62" y="559" class="body">四项能力与原话证据</text>
+<text x="62" y="590" class="body">提示依赖、可信度、到期复习</text>
+<text x="62" y="621" class="body">决定下一次应该练什么</text>
+<rect x="510" y="480" width="420" height="184" rx="16" fill="#e4f3ee" stroke="#d8e3ea"/>
+<rect x="510" y="498" width="5" height="30" rx="2" fill="#148675"/>
+<text x="532" y="521" class="head">场景规划器</text>
+<text x="532" y="559" class="body">筛选已审核且符合权益的任务</text>
+<text x="532" y="590" class="body">匹配难度、复习与剧情前置条件</text>
+<text x="532" y="621" class="body">生成可解释推荐，失败时回退</text>
+<rect x="980" y="480" width="420" height="184" rx="16" fill="#fff3e6" stroke="#d8e3ea"/>
+<rect x="980" y="498" width="5" height="30" rx="2" fill="#bd8639"/>
+<text x="1002" y="521" class="head">故事状态</text>
+<text x="1002" y="559" class="body">章节、人物、地点与既有事实</text>
+<text x="1002" y="590" class="body">未解决事件、选择与分支汇合</text>
+<text x="1002" y="621" class="body">决定练习如何接入下一段剧情</text>
+<path d="M462 570 H504" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M978 570 H936" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M720 480 V441 H605 V417" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="40" y="709" class="label">03 实现分层：实时对话保持轻量，结束后异步评估和规划</text>
+<rect x="40" y="733" width="420" height="181" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="40" y="751" width="5" height="30" rx="2" fill="#597bc2"/>
+<text x="62" y="774" class="head">复用现有能力</text>
+<text x="62" y="812" class="body">AvatarClient / AvatarView</text>
+<text x="62" y="843" class="body">LiveKit + ASR / LLM / TTS</text>
+<text x="62" y="874" class="body">口型、动作、房间级消息</text>
+<rect x="510" y="733" width="420" height="181" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="510" y="751" width="5" height="30" rx="2" fill="#148675"/>
+<text x="532" y="774" class="head">新增产品能力</text>
+<text x="532" y="812" class="body">身份、跨会话记录、任务状态机</text>
+<text x="532" y="843" class="body">证据评估、规划、剧情快照</text>
+<text x="532" y="874" class="body">内容版本、订单权益与异步恢复</text>
+<rect x="980" y="733" width="420" height="181" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="980" y="751" width="5" height="30" rx="2" fill="#bd8639"/>
+<text x="1002" y="774" class="head">运营与质量闭环</text>
+<text x="1002" y="812" class="body">教研审核模板与反馈</text>
+<text x="1002" y="843" class="body">真实语音故障、推荐与成本追踪</text>
+<text x="1002" y="874" class="body">用户可换题、申诉、删除记录</text>
+<text x="40" y="958" class="label">04 验证关口</text>
+<rect x="40" y="980" width="1360" height="110" rx="16" fill="#e4f3ee" stroke="#d8e3ea"/>
+<rect x="40" y="998" width="5" height="30" rx="2" fill="#148675"/>
+<text x="62" y="1021" class="head">三组对照：固定场景 A → 动态路径 B → 动态路径加连续故事 C</text>
+<text x="62" y="1059" class="body">衡量：新场景独立完成能力、七日主动复用、净付费与复购、每位用户实际服务贡献</text>
+<text x="40" y="1139" class="small">规划稿 · 2026-11-02｜图中新增能力尚待开发｜详细规则、数据模型与异常处理见 product-plan.md</text>
+</svg>

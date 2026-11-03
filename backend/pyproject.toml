@@ -17,6 +17,8 @@ dependencies = [
   "websockets>=14,<16",
   "kokoro-onnx==0.6.1",
   "misaki[zh]>=0.9.4,<0.10",
+  "authlib>=1.6,<2",
+  "itsdangerous>=2.2,<3",
 ]
 [project.optional-dependencies]
 google = ["livekit-plugins-google~=1.8"]

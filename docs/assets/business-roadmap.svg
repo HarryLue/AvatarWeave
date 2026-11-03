@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1180" viewBox="0 0 1440 1180" role="img" aria-labelledby="title desc">
+<title id="title">剧情式自适应口语 业务路线图</title><desc id="desc">十二周完成小规模商业验证；阶段通过后再增加投入。周数从正式启动计算，不构成交付承诺。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#67859a"/></marker></defs>
+<style>text { font-family: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill:#183347; } .title {font-size:34px;font-weight:700} .sub {font-size:18px;fill:#526d80} .label {font-size:17px;font-weight:700;fill:#527083} .head {font-size:22px;font-weight:700} .body {font-size:18px;fill:#39586d} .small {font-size:16px;fill:#526d80} .tag {font-size:15px;font-weight:700;fill:#137767}</style>
+<rect width="1440" height="1180" fill="#f4f7fa"/>
+<rect width="1440" height="8" fill="#148675"/>
+<text x="40" y="64" class="title">剧情式自适应口语 业务路线图</text>
+<text x="40" y="103" class="sub">十二周完成小规模商业验证；阶段通过后再增加投入。周数从正式启动计算，不构成交付承诺。</text>
+<text x="40" y="154" class="label">投入假设：2 名工程师 + 半职产品运营 + 半职教研，设计测试按需支持｜每两周评审一次</text>
+<rect x="40" y="190" width="430" height="290" rx="16" fill="white" stroke="#d8e3ea"/>
+<text x="62" y="225" class="tag">01  W1—W2</text>
+<text x="62" y="267" class="head">目标人群与首章原型</text>
+<text x="62" y="312" class="body">访谈 10—15 人，招首批体验者</text>
+<text x="62" y="345" class="body">验证手机语音、任务与卡通接受度</text>
+<text x="62" y="378" class="body">交付：首章、反馈原型、埋点</text>
+<rect x="56" y="421" width="398" height="43" rx="9" fill="#e4f3ee"/>
+<text x="68" y="449" class="small">关口：目标需求与首练可用</text>
+<path d="M474 335 H497" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="505" y="190" width="430" height="290" rx="16" fill="white" stroke="#d8e3ea"/>
+<text x="527" y="225" class="tag">02  W3—W4</text>
+<text x="527" y="267" class="head">可信反馈与购买闭环</text>
+<text x="527" y="312" class="body">累计 30—60 人探索样本</text>
+<text x="527" y="345" class="body">原话证据、重试、账户与权益</text>
+<text x="527" y="378" class="body">交付：报告审核、主题包实付</text>
+<rect x="521" y="421" width="398" height="43" rx="9" fill="#e4f3ee"/>
+<text x="533" y="449" class="small">关口：反馈可信且交付稳定</text>
+<path d="M939 335 H962" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="970" y="190" width="430" height="290" rx="16" fill="white" stroke="#d8e3ea"/>
+<text x="992" y="225" class="tag">03  W5—W6</text>
+<text x="992" y="267" class="head">动态路径与迁移验证</text>
+<text x="992" y="312" class="body">四项能力、跨会话记录、规则规划</text>
+<text x="992" y="345" class="body">比较固定路径 A 与动态路径 B</text>
+<text x="992" y="378" class="body">交付：推荐理由、迁移测试</text>
+<rect x="986" y="421" width="398" height="43" rx="9" fill="#e4f3ee"/>
+<text x="998" y="449" class="small">关口：路径有可解释价值</text>
+<rect x="40" y="530" width="430" height="290" rx="16" fill="white" stroke="#d8e3ea"/>
+<text x="62" y="565" class="tag">04  W7—W8</text>
+<text x="62" y="607" class="head">连续故事与三组实验</text>
+<text x="62" y="652" class="body">上线七章骨架、事实与分支汇合</text>
+<text x="62" y="685" class="body">新批次分组，加入故事体验 C</text>
+<text x="62" y="718" class="body">交付：相同价格与提醒下的比较</text>
+<rect x="56" y="761" width="398" height="43" rx="9" fill="#e4f3ee"/>
+<text x="68" y="789" class="small">关口：检查故事带来的增量</text>
+<path d="M474 675 H497" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="505" y="530" width="430" height="290" rx="16" fill="white" stroke="#d8e3ea"/>
+<text x="527" y="565" class="tag">05  W9—W12</text>
+<text x="527" y="607" class="head">完整观察与商业复测</text>
+<text x="527" y="652" class="body">观察复用、延迟迁移与复购</text>
+<text x="527" y="685" class="body">复测第二批渠道，核算真实成本</text>
+<text x="527" y="718" class="body">交付：继续、收缩或停止扩张决策</text>
+<rect x="521" y="761" width="398" height="43" rx="9" fill="#e4f3ee"/>
+<text x="533" y="789" class="small">关口：效果、复用与经济性</text>
+<path d="M939 675 H962" fill="none" stroke="#67859a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="970" y="530" width="430" height="290" rx="16" fill="white" stroke="#d8e3ea"/>
+<text x="992" y="565" class="tag">06  第4—6个月</text>
+<text x="992" y="607" class="head">有条件扩大与融资准备</text>
+<text x="992" y="652" class="body">只扩大已被证实的产品价值</text>
+<text x="992" y="685" class="body">增加一个主题，复测渠道与续费</text>
+<text x="992" y="718" class="body">交付：增长证据和资金用途</text>
+<rect x="986" y="761" width="398" height="43" rx="9" fill="#e4f3ee"/>
+<text x="998" y="789" class="small">关口：可重复增长后再放大</text>
+<text x="40" y="514" class="small">阶段按编号推进；任一关口未通过，先修复或调整当前阶段，不自动增加预算。</text>
+<text x="40" y="868" class="label">业务决策</text>
+<rect x="40" y="892" width="420" height="147" rx="16" fill="#eef4ff" stroke="#d8e3ea"/>
+<rect x="40" y="910" width="5" height="30" rx="2" fill="#597bc2"/>
+<text x="62" y="933" class="head">路径有效，剧情无增量</text>
+<text x="62" y="971" class="body">保留学习路径</text>
+<text x="62" y="1002" class="body">减少剧情与美术投入</text>
+<rect x="510" y="892" width="420" height="147" rx="16" fill="#fff3e6" stroke="#d8e3ea"/>
+<rect x="510" y="910" width="5" height="30" rx="2" fill="#bd8639"/>
+<text x="532" y="933" class="head">首购成立，续费不成立</text>
+<text x="532" y="971" class="body">评估阶段性需求</text>
+<text x="532" y="1002" class="body">优先经营主题包与复购</text>
+<rect x="980" y="892" width="420" height="147" rx="16" fill="#ffffff" stroke="#d8e3ea"/>
+<rect x="980" y="910" width="5" height="30" rx="2" fill="#148675"/>
+<text x="1002" y="933" class="head">效果、付费与渠道可重复</text>
+<text x="1002" y="971" class="body">扩大一个主题并复测</text>
+<text x="1002" y="1002" class="body">准备融资或经营增长</text>
+<text x="40" y="1082" class="small">预算：每四周分段释放，按实际人力、授权、服务和招募报价填报；扩张前核算同批用户的服务贡献。</text>
+<text x="40" y="1139" class="small">规划稿 · 2026-11-02｜小样本用于探索，不据此声称统计显著｜阶段交付、口径与条件见 business-roadmap.md</text>
+</svg>

@@ -6,25 +6,52 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from google.protobuf.json_format import ParseDict
-from livekit import api
 from pydantic import BaseModel, ConfigDict, Field
+
+from livekit import api
 
 from .avatars import load_avatars
 from .config import settings
 from .db import engine, init_db
+from .memory.config import MemorySettings
+from .memory.execution import MemoryFault
+from .memory.http import MemoryRuntime, fault_handler
+from .memory.http import router as memory_router
 from .pipeline import load_pipeline
 from .session_options import merge_options
 from .voices import open_preview, voice_service
+
+memory_settings = MemorySettings()
 
 
 @asynccontextmanager
 async def lifespan(app):
     await init_db()
-    yield
-    await engine.dispose()
+    app.state.memory_runtime = None
+    try:
+        if memory_settings.enabled:
+            app.state.memory_runtime = await MemoryRuntime.open(memory_settings)
+        yield
+    finally:
+        if app.state.memory_runtime:
+            await app.state.memory_runtime.database.close()
+        await engine.dispose()
 
 
 app = FastAPI(title="AvatarWeave", version="0.1.0", lifespan=lifespan)
+app.include_router(memory_router)
+app.add_exception_handler(MemoryFault, fault_handler)
+if memory_settings.enabled:
+    from starlette.middleware.sessions import SessionMiddleware
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=memory_settings.session_secret.get_secret_value(),
+        session_cookie="__Host-avatarweave-oidc",
+        max_age=600,
+        https_only=True,
+        same_site="lax",
+    )
 
 
 async def authenticate(authorization: str = Header(default="")):
@@ -69,6 +96,9 @@ async def health():
 
 @app.post("/api/token", status_code=201, dependencies=[Depends(authenticate)])
 async def token(body: TokenRequest, request: Request):
+    # Public demo credentials can never join the reserved private-room namespace.
+    if body.room_name.startswith("vm-"):
+        raise HTTPException(403, "Private sessions require account credentials")
     if len(body.participant_attributes) > 16 or any(
         k.startswith("lk.") or len(k) > 128 or len(v) > 1024
         for k, v in body.participant_attributes.items()
@@ -76,11 +106,7 @@ async def token(body: TokenRequest, request: Request):
         raise HTTPException(422, "Invalid participant attributes")
     allowed = {a.strip() for a in settings.allowed_agents.split(",") if a.strip()}
     raw = body.room_config or {"agents": [{"agent_name": settings.agent_name}]}
-    if (
-        set(raw) - {"agents"}
-        or not isinstance(raw.get("agents"), list)
-        or len(raw["agents"]) != 1
-    ):
+    if set(raw) - {"agents"} or not isinstance(raw.get("agents"), list) or len(raw["agents"]) != 1:
         raise HTTPException(422, "Exactly one allowed agent is required")
     for agent in raw["agents"]:
         if (
@@ -181,9 +207,7 @@ async def preview(body: VoicePreview):
 class PreviewResponse(StreamingResponse):
     def __init__(self, playback):
         self.playback = playback
-        super().__init__(
-            playback.chunks(), media_type="audio/pcm", headers=playback.headers
-        )
+        super().__init__(playback.chunks(), media_type="audio/pcm", headers=playback.headers)
 
     async def __call__(self, scope, receive, send):
         try:

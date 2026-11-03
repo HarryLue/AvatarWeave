@@ -151,4 +151,6 @@ backend/.venv/bin/python scripts/voice-smoke.py --exercise-asr
 
 The final two checks call the selected model services and may incur provider charges. CI covers builds, SQLite/PostgreSQL, the current protocol, and browser checks. Manual workflows are available for real CPU/GPU inference. Renovate dependency updates require integration with the remote repository platform.
 
+[Product plan and diagrams (Chinese)](docs/product-plan.md) · [Business roadmap (Chinese)](docs/business-roadmap.md)
+
 [Architecture](docs/architecture.md) · [Protocol](docs/protocol.md) · [Extension guide](docs/extending.md) · [Maintenance](docs/maintenance.md) · [Verification records](docs/verification.md) · [Third-party sources and licenses](THIRD_PARTY_NOTICES.md)

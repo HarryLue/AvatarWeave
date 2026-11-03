@@ -152,4 +152,6 @@ backend/.venv/bin/python scripts/voice-smoke.py --exercise-asr
 
 最后两项调用所选模型服务，可能产生供应商费用。CI 包含构建、SQLite/PostgreSQL、当前协议和浏览器验证；CPU/GPU 真实推理提供手动工作流。Renovate 必须接入远程平台后才执行依赖更新。
 
+[产品方案与方案图](docs/product-plan.md) · [业务路线图](docs/business-roadmap.md)
+
 [架构](docs/architecture.md) · [协议](docs/protocol.md) · [扩展指南](docs/extending.md) · [维护](docs/maintenance.md) · [验证记录](docs/verification.md) · [第三方来源与许可](THIRD_PARTY_NOTICES.md)
