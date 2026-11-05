@@ -73,7 +73,7 @@ class MemoryAgentMixin:
             (m for m in reversed(chat_ctx.items) if getattr(m, "role", None) == "user"), None
         )
         text = latest.text_content if latest is not None else "请简短问候，不主动提起私人历史。"
-        turn_id = latest.id if latest is not None else "welcome:" + self.private.session.id
+        turn_id = latest.id if latest is not None else None
         generation, stream = None, None
         try:
             from livekit.agents.voice.agent_activity import _SpeechHandleContextVar
@@ -81,6 +81,8 @@ class MemoryAgentMixin:
             speech = _SpeechHandleContextVar.get(None)
             if speech is None or speech.interrupted:
                 raise MemoryFault("stale_generation", "Speech task was interrupted")
+            if latest is None:
+                turn_id = "welcome:" + speech.id
             previous = getattr(self, "_memory_speeches", {}).get(speech.id)
             if previous:
                 await self.private.check(previous[0], previous[1])
@@ -121,7 +123,9 @@ class MemoryAgentMixin:
                 "open_loops 仅允许在回应当前需求后自然询问一次结果，不表示事情已经完成；"
                 "用户不愿谈、情绪不适合或话题无关时直接跳过，不制造提醒或推送。"
                 + (
-                    "本轮原话已记录，长期记忆还在整理；不能声称已记住、已更新记忆。"
+                    "本轮新增原话已记录，还需后台整理，不能声称本轮内容已更新为长期记忆。"
+                    "已提供的合法长期记忆仍可直接使用，例如根据已有姓名回答身份问题；"
+                    "本轮整理状态不否定已有记忆，不要因此声称忘记或无法读取它们。"
                     if self.private.last_persisted
                     else "本次不保存、不读取旧私人记忆，不能承诺长期记住本次内容。"
                 ),

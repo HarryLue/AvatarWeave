@@ -8,8 +8,13 @@ type Transcript = { event_id: string; source_revision: number; text: string };
 type Person = { entity_id: string; version: number; canonical_name: string; aliases: string[] };
 type Reflection = { reflection_id: string; version: number; text: string; state: 'needs_confirmation' | 'confirmed' | 'rejected' };
 const savedSessionKey = 'avatarweave.private-session';
+const pendingSessionKey = 'avatarweave.private-session.pending';
 type Identity = { state: 'anonymous' | 'account'; companion_ids: string[] };
 export type PrivateCredentials = { server_url: string; participant_token: string; session_id: string };
+
+class MemoryApiError extends Error {
+  constructor(readonly code: string, message: string) { super(message); }
+}
 
 function csrf() {
   const item = document.cookie.split('; ').find(value => value.startsWith('__Host-avatarweave-csrf='));
@@ -22,7 +27,10 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<{ d
   const result = await response.json();
   if (!response.ok || result.status === 'error') {
     const messages: Record<string, string> = { unauthorized: '登录已失效，请重新登录。', version_conflict: '信息已发生变化，请刷新后再试。', privacy_changed: '记忆设置或授权已变化，请刷新后再试。', overloaded: '当前处理繁忙，请稍后再试。', quota_exceeded: '本次操作超过处理上限，请稍后再试。', not_found: '这项内容已不可用，请刷新查看。', unsupported_capability: '这项功能尚未启用。', invalid_model_output: '内容格式无法处理，请检查后重试。' };
-    throw new Error(messages[result.error?.code] ?? '记忆服务暂不可用，请稍后重试。');
+    const message = result.error?.code === 'quota_exceeded' && result.error?.message === 'Two active sessions allowed'
+      ? '账号已有两场正在连接或进行中的对话，请先结束一场，再重试。'
+      : messages[result.error?.code] ?? '记忆服务暂不可用，请稍后重试。';
+    throw new MemoryApiError(result.error?.code ?? 'unavailable', message);
   }
   return { data: result.data as T, pending: result.status === 'partial' };
 }
@@ -125,7 +133,7 @@ export function MemoryPanel({ disabled, onConnect }: { disabled: boolean; onConn
     setPreferences(result.data); setNotice('记忆设置已保存。');
   }
   return <section className="memory-panel" aria-label="我的记忆">
-    <div className="memory-heading"><h2>我的记忆</h2><div><button disabled={busy} onClick={() => void work(() => load())}>刷新</button><button disabled={busy || disabled} onClick={() => void work(async () => { await api('/auth/logout', 'POST'); sessionStorage.removeItem(savedSessionKey); setItems([]); setPreferences(null); setIdentity({ state: 'anonymous', companion_ids: identity.companion_ids }); })}>退出账号</button></div></div>
+    <div className="memory-heading"><h2>我的记忆</h2><div><button disabled={busy} onClick={() => void work(() => load())}>刷新</button><button disabled={busy || disabled} onClick={() => void work(async () => { await api('/auth/logout', 'POST'); sessionStorage.removeItem(savedSessionKey); sessionStorage.removeItem(pendingSessionKey); setItems([]); setPreferences(null); setIdentity({ state: 'anonymous', companion_ids: identity.companion_ids }); })}>退出账号</button></div></div>
     {preferences && <div className="memory-preferences">
       <label><input type="checkbox" checked={preferences.long_term_memory_enabled} disabled={busy || disabled} onChange={event => void work(() => savePreferences({ ...preferences, long_term_memory_enabled: event.target.checked }))} />允许保存长期记忆</label>
       <label><input type="checkbox" checked={preferences.retain_evidence_capsules} disabled={busy} onChange={event => void work(() => savePreferences({ ...preferences, retain_evidence_capsules: event.target.checked }))} />允许长期保留必要的来源片段</label>
@@ -141,11 +149,23 @@ export function MemoryPanel({ disabled, onConnect }: { disabled: boolean; onConn
         try { saved = JSON.parse(sessionStorage.getItem(savedSessionKey) ?? 'null'); } catch { sessionStorage.removeItem(savedSessionKey); }
         let result: { data: SessionView; pending: boolean } | undefined;
         if (saved && saved.memory_enabled === enabled) {
-          try { result = await api<SessionView>(`/sessions/${encodeURIComponent(saved.id)}/resume`, 'POST', { capabilities, idempotency_key: crypto.randomUUID() }); }
-          catch { sessionStorage.removeItem(savedSessionKey); }
-        } else if (saved) { await endPrivateSession(saved.id).catch(() => {}); }
-        result ??= await api<SessionView>('/sessions', 'POST', { companion_id: identity.companion_ids[0], memory_enabled: enabled, capabilities, idempotency_key: crypto.randomUUID() });
+          try { result = await api<SessionView>(`/sessions/${encodeURIComponent(saved.id)}/resume`, 'POST', { last_event_sequence: 0, capabilities, idempotency_key: crypto.randomUUID() }); }
+          catch (failure) {
+            if (!(failure instanceof MemoryApiError) || !['not_found', 'invalid_transition'].includes(failure.code)) throw failure;
+            sessionStorage.removeItem(savedSessionKey);
+          }
+        } else if (saved) { await endPrivateSession(saved.id); }
+        if (!result) {
+          let pending: { companion_id: string; memory_enabled: boolean; idempotency_key: string } | null = null;
+          try { pending = JSON.parse(sessionStorage.getItem(pendingSessionKey) ?? 'null'); } catch { sessionStorage.removeItem(pendingSessionKey); }
+          if (!pending || pending.companion_id !== identity.companion_ids[0] || pending.memory_enabled !== enabled || typeof pending.idempotency_key !== 'string') {
+            pending = { companion_id: identity.companion_ids[0], memory_enabled: enabled, idempotency_key: crypto.randomUUID() };
+          }
+          sessionStorage.setItem(pendingSessionKey, JSON.stringify(pending));
+          result = await api<SessionView>('/sessions', 'POST', { ...pending, capabilities });
+        }
         sessionStorage.setItem(savedSessionKey, JSON.stringify({ id: result.data.session_id, memory_enabled: result.data.memory_enabled }));
+        sessionStorage.removeItem(pendingSessionKey);
         if (!result.data.rtc) { setNotice('账号会话已建立，私人语音尚未启用。'); await endPrivateSession(result.data.session_id); return; }
         await onConnect({ ...result.data.rtc, session_id: result.data.session_id });
       })}>开始账号对话</button>
@@ -172,6 +192,9 @@ export function MemoryPanel({ disabled, onConnect }: { disabled: boolean; onConn
 }
 
 export async function endPrivateSession(id: string) {
-  sessionStorage.removeItem(savedSessionKey);
-  await api(`/sessions/${id}/end`, 'POST', { reason: 'user_end', idempotency_key: crypto.randomUUID() });
+  try { await api(`/sessions/${encodeURIComponent(id)}/end`, 'POST', { reason: 'user_end', idempotency_key: crypto.randomUUID() }); }
+  catch (failure) { if (!(failure instanceof MemoryApiError) || failure.code !== 'not_found') throw failure; }
+  try {
+    if (JSON.parse(sessionStorage.getItem(savedSessionKey) ?? 'null')?.id === id) sessionStorage.removeItem(savedSessionKey);
+  } catch { sessionStorage.removeItem(savedSessionKey); }
 }

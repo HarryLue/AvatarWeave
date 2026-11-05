@@ -1,7 +1,9 @@
 """Bounded chat-compatible model gateway; task/schema pairing is server-owned."""
 
 import asyncio
+import hashlib
 import json
+import re
 from time import monotonic
 
 import httpx
@@ -10,16 +12,20 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .contracts import (
     AdmissionInput,
     AdmissionOutput,
+    CandidateMemory,
     CompressionOutput,
     DialogueDraft,
+    EvidenceRef,
     ModelTaskInput,
     ModelTaskOutput,
     PersonaOutput,
     QueryOutput,
     ReflectionOutput,
+    Statement,
+    TimeWindow,
 )
 from .execution import MemoryFault
-from .lifecycle import PREDICATES, enclosing_clause
+from .lifecycle import PREDICATES, enclosing_clause, normalized, rule_for
 
 TASKS = {
     "extract": ("admission.v1", AdmissionOutput),
@@ -185,15 +191,20 @@ class ModelGateway:
     async def extract(self, request: AdmissionInput):
         from .contracts import ModelMessage
 
+        if literal := literal_self_name(request):
+            return literal
         allowed = ", ".join(PREDICATES)
         prompt = (
             "从用户最终原话提取可独立更新的真实生活事实，不把寒暄、假设、玩笑、引述别人当确定事实。"
             "每个候选必须引用本批来源的真实 Unicode 字符区间；原话和标点逐字匹配。"
             "quote 选取简短完整的逐字原文；服务端仅在片段唯一时对齐 Unicode 位置，不接受改写片段。"
             "引用须保留主语、否定、条件与时间，不要只摘出字段值。"
-            "subject_id 对用户本人使用 " + request.scope.user_id + "；对第三人仅填原话中的姓名或称呼字符串，"
+            "subject_id 对用户本人使用 "
+            + request.scope.user_id
+            + "；对第三人仅填原话中的姓名或称呼字符串，"
             "由服务端匹配已确认的稳定实体；不得编造第三人 ID，不把第三人的经历归给用户。"
             "只使用谓词：" + allowed + "。namespace=life；assertion_kind=user_report。"
+            "这些谓词的 value_type 全部使用 text（姓名也使用 text）；不要使用 entity_ref。"
             "canonical_value 必须是原话中的子串，display_text 简短忠实；明确否定保留 negative。"
             "不推断人格或诊断。日期仅以 original_expression 保留用户原始表达，start/end 置 null，precision=unknown。"
             "不产生已提交、已播放或已索引的声明。decisions 可以为空，准入由服务端重新判断。"
@@ -203,22 +214,142 @@ class ModelGateway:
             [e.model_dump(mode="json") for e in request.events], ensure_ascii=False
         )
         chunks = [serialized[index : index + 14000] for index in range(0, len(serialized), 14000)]
-        result = await self.task(
-            ModelTaskInput(
-                meta=request.meta,
-                scope=request.scope,
-                fence=request.fence,
-                task="extract",
-                profile_id="memory-extract.v1",
-                prompt_version=request.extraction_prompt_version,
-                output_schema="admission.v1",
-                messages=[ModelMessage(role="system", content=prompt)]
-                + [ModelMessage(role="user", content=part) for part in chunks],
-                max_output_tokens=6000,
-            ),
-            source_events=request.events,
+        task = ModelTaskInput(
+            meta=request.meta,
+            scope=request.scope,
+            fence=request.fence,
+            task="extract",
+            profile_id="memory-extract.v1",
+            prompt_version=request.extraction_prompt_version,
+            output_schema="admission.v1",
+            messages=[ModelMessage(role="system", content=prompt)]
+            + [ModelMessage(role="user", content=part) for part in chunks],
+            max_output_tokens=6000,
         )
-        return result.payload
+        # One repair at most, sharing the admission deadline. Never accept an
+        # invented value/span just because the provider returned valid JSON.
+        async with asyncio.timeout(request.meta.execution.budget_ms / 1000):
+            for attempt in range(2):
+                try:
+                    result = await self.task(task, source_events=request.events)
+                    validate_extraction(result.payload, request)
+                    return result.payload
+                except MemoryFault as error:
+                    if attempt or error.info.code not in {
+                        "invalid_model_output",
+                        "evidence_missing",
+                    }:
+                        raise
+                    task = task.model_copy(
+                        update={
+                            "messages": task.messages
+                            + [
+                                ModelMessage(
+                                    role="system",
+                                    content="上次输出未通过结构或原文证据校验。请重新提取完整 JSON。"
+                                    "所有字段必须符合 schema；canonical_value 和 qualifier.value 必须逐字出现于引用原文，"
+                                    "例如不能把原文‘会议’改写为‘开会’。来源 ID、revision、origin 必须与输入一致，"
+                                    "quote 必须为原文完整语句。不得编造事实、证据或用户确认；没有可提取事实时返回空 candidates。",
+                                )
+                            ]
+                        }
+                    )
+
+
+def validate_extraction(output, request):
+    events = {(e.event_id, e.revision): e for e in request.events}
+    if len(output.candidates) > request.max_candidates or len(
+        {c.candidate_id for c in output.candidates}
+    ) != len(output.candidates):
+        raise MemoryFault(
+            "invalid_model_output", "Extraction candidate budget or identifiers invalid"
+        )
+    for candidate in output.candidates:
+        try:
+            rule_for(candidate)
+        except MemoryFault:
+            raise MemoryFault(
+                "invalid_model_output",
+                "Extraction predicate, value type or qualifiers are unregistered",
+            ) from None
+        if candidate.namespace != "life" or candidate.assertion_kind != "user_report":
+            raise MemoryFault(
+                "invalid_model_output", "Automatic extraction must be a personal user report"
+            )
+        for pointer in candidate.sources:
+            event = events.get((pointer.event_id, pointer.source_revision))
+            if (
+                event is None
+                or pointer.origin != event.origin
+                or event.content[pointer.start_char : pointer.end_char] != pointer.quote
+            ):
+                raise MemoryFault(
+                    "evidence_missing", "Extraction evidence differs from provided source"
+                )
+        values = [candidate.statement.canonical_value] + [
+            q.value for q in candidate.statement.qualifiers
+        ]
+        if any(
+            not any(normalized(value) in normalized(p.quote) for p in candidate.sources)
+            for value in values
+        ):
+            raise MemoryFault("evidence_missing", "Extraction value is absent from its evidence")
+
+
+def literal_self_name(request):
+    """A complete explicit self-introduction needs no probabilistic extraction.
+
+    Questions, fictional/quoted introductions, third persons and compound turns
+    use normal extraction. Admission still checks the persisted source and scope.
+    """
+    if not request.memory_enabled or len(request.events) != 1:
+        return None
+    event = request.events[0]
+    if (
+        not event.is_final
+        or event.fictional
+        or event.origin not in {"user_text", "user_transcript"}
+    ):
+        return None
+    match = re.fullmatch(
+        r"\s*(?:请(?:帮我)?记住[，,：:\s]*)?(?:我叫|我名叫|我的名字[是叫])(?P<name>[\u3400-\u9fff]{2,8})[。！!]?\s*",
+        event.content,
+    )
+    if not match or re.search(
+        r"什么|怎么|不要|不是|可以|你|他|她|它|大家|[吗呢吧]$", match["name"]
+    ):
+        return None
+    candidate = CandidateMemory(
+        candidate_id=hashlib.sha256(
+            f"literal-name.v1:{event.event_id}:{event.revision}".encode()
+        ).hexdigest(),
+        namespace="life",
+        content_kind="fact",
+        assertion_kind="user_report",
+        interpretation="asserted",
+        sensitivity="normal",
+        proposed_importance=0.6,
+        display_text=match["name"],
+        statement=Statement(
+            subject_id=request.scope.user_id,
+            predicate="name",
+            value_type="text",
+            canonical_value=match["name"],
+            polarity="positive",
+            valid_time=TimeWindow(precision="unknown"),
+        ),
+        sources=[
+            EvidenceRef(
+                event_id=event.event_id,
+                source_revision=event.revision,
+                start_char=0,
+                end_char=len(event.content),
+                quote=event.content,
+                origin=event.origin,
+            )
+        ],
+    )
+    return AdmissionOutput(candidates=[candidate], decisions=[], input_watermark=0)
 
 
 def align_evidence(content, events):

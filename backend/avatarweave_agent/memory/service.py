@@ -7,7 +7,7 @@ P2+ consumers may settle rows but cannot turn source persistence into a fact.
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 
 from .archive import ArchiveMixin
 from .context import ContextMixin
@@ -31,6 +31,7 @@ from .contracts import (
 from .controls import ControlMixin
 from .embedding import EmbeddingMixin
 from .entities import EntityMixin
+from .event_updates import EventUpdateMixin
 from .execution import Executor, MemoryFault
 from .facts import FactMixin
 from .jobs import JobMixin
@@ -68,6 +69,7 @@ def default_preferences():
 
 
 class MemoryService(
+    EventUpdateMixin,
     FactMixin,
     PrivacyMixin,
     ControlMixin,
@@ -182,6 +184,43 @@ class MemoryService(
             raise MemoryFault("not_found", "Session not found")
         return row
 
+    async def _session_slot_count(self, db, account_id, *, exclude=None):
+        now = self.clock()
+        query = (
+            select(func.count())
+            .select_from(MemorySession)
+            .where(
+                MemorySession.account_id == account_id,
+                MemorySession.status != "ended",
+                or_(
+                    MemorySession.lease_until > now,
+                    # Existing schema-v3 rows may predate explicit connection reservations.
+                    (MemorySession.status == "ready")
+                    & MemorySession.lease_until.is_(None)
+                    & (MemorySession.created_at > now - timedelta(minutes=2)),
+                ),
+            )
+        )
+        if exclude:
+            query = query.where(MemorySession.id != exclude)
+        return await db.scalar(query)
+
+    async def _reserve_session_slot(self, db, row):
+        now = self.clock()
+        if row.lease_until and utc(row.lease_until) > now:
+            return  # A live owner/reservation already occupies this slot.
+        if await self._session_slot_count(db, row.account_id, exclude=row.id) >= 2:
+            raise MemoryFault("quota_exceeded", "Two active sessions allowed", retryable=True)
+        # Retain the session and its sources for recovery. An expired worker
+        # cannot renew after losing owner_id, or publish after resume cancels it.
+        row.owner_id = None
+        row.lease_until = now + timedelta(minutes=2)
+        # An old room may still exist without a running dispatch. Rotate only
+        # the transport; the stable session ID and all source ownership remain.
+        row.room = "vm-" + uuid4().hex
+        row.participant = "vm-user-" + uuid4().hex
+        row.status = "reconnecting" if row.owner_epoch else "ready"
+
     async def session(self, request: SessionInput) -> ModuleResult[SessionOutput]:
         async def operation():
             if request.idempotency_key.startswith("__"):
@@ -209,6 +248,7 @@ class MemoryService(
                                 raise MemoryFault(
                                     "invalid_transition", "Ended session cannot resume"
                                 )
+                            await self._reserve_session_slot(db, row)
                             # An active Worker is not displaced by a browser reconnect.
                             row.capabilities_json = request.capabilities.model_dump_json()
                             from .tables import Generation, OutputLedger
@@ -269,17 +309,13 @@ class MemoryService(
                         or row.capabilities_json != capabilities
                     ):
                         raise MemoryFault("version_conflict", "Idempotency key already used")
+                    if row.status != "ended":
+                        await self._reserve_session_slot(db, row)
                 else:
                     prefs = PrivacyPreference.model_validate_json(account.preferences_json)
                     if request.memory_enabled and not prefs.long_term_memory_enabled:
                         raise MemoryFault("invalid_transition", "Enable memory preferences first")
-                    count = await db.scalar(
-                        select(func.count())
-                        .select_from(MemorySession)
-                        .where(
-                            MemorySession.account_id == account.id, MemorySession.status != "ended"
-                        )
-                    )
+                    count = await self._session_slot_count(db, account.id)
                     if count >= 2:
                         raise MemoryFault(
                             "quota_exceeded", "Two active sessions allowed", retryable=True
@@ -295,6 +331,7 @@ class MemoryService(
                         capabilities_json=capabilities,
                         idempotency_key=request.idempotency_key,
                         owner_epoch=0,
+                        lease_until=self.clock() + timedelta(minutes=2),
                         created_at=self.clock(),
                     )
                     db.add(row)
@@ -322,10 +359,12 @@ class MemoryService(
             now = self.clock()
             if row.room != room or row.status == "ended":
                 raise MemoryFault("not_found", "Session not available")
-            if row.lease_until and utc(row.lease_until) > now:
+            if row.owner_id is not None and row.lease_until and utc(row.lease_until) > now:
                 if row.owner_id == worker_id:
                     return row.owner_epoch
                 raise MemoryFault("version_conflict", "Session already has an owner")
+            if await self._session_slot_count(db, scope.user_id, exclude=row.id) >= 2:
+                raise MemoryFault("quota_exceeded", "Two active sessions allowed", retryable=True)
             row.owner_epoch += 1
             row.owner_id = worker_id
             row.lease_until = now + timedelta(seconds=30)

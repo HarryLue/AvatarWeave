@@ -307,64 +307,35 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(flush)
     if private is not None:
-        from livekit.agents.voice.room_io import RoomOptions
-
         from .memory.actions import PrivateActions
-
-        assistant = Assistant(ctx, chat_ctx, avatar, private)
-        assistant.private_actions = PrivateActions(ctx, private, avatar)
-        memory_stack.push_async_callback(assistant.private_actions.close)
-        memory_stack.push_async_callback(session.aclose)
-        await session.start(
-            room=ctx.room,
-            agent=assistant,
-            room_options=RoomOptions(participant_identity=private.session.participant),
-            record={
-                "audio": False,
-                "traces": False,
-                "logs": False,
-                "transcript": False,
-                "input_delta": False,
-                "redaction": True,
-            },
+        from .memory.rtc_session import (
+            PrivateConnectionGreeting,
+            maintain_private_owner,
+            start_private_session,
+            watch_private_generation,
         )
 
-        async def heartbeat():
-            try:
-                while True:
-                    await asyncio.sleep(10)
-                    await private.service.renew_owner(
-                        private.scope, private.session.id, ctx.job.id, private.owner_epoch
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 -- revoke on any failed ownership renewal
-                await private.cancel()
-                session.interrupt()
+        assistant = Assistant(ctx, chat_ctx, avatar, private)
+        greeting = PrivateConnectionGreeting(session, private)
+        assistant.private_actions = PrivateActions(
+            ctx, private, avatar, ready=False, on_connection_ready=greeting.connected
+        )
+        memory_stack.push_async_callback(assistant.private_actions.close)
+        memory_stack.push_async_callback(session.aclose)
+        await start_private_session(ctx, session, assistant)
 
-        heartbeat_task = asyncio.create_task(heartbeat())
+        heartbeat_task = asyncio.create_task(maintain_private_owner(ctx, session, private))
 
-        async def cancellation_watch():
-            last_invalid = None
-            while True:
-                await asyncio.sleep(0.1)
-                if private.generation_id:
-                    try:
-                        await private.check()
-                    except Exception:  # noqa: BLE001 -- cancellation is fail-closed
-                        if last_invalid == private.generation_id:
-                            continue
-                        last_invalid = private.generation_id
-                        session.interrupt()
-                        await assistant.private_actions.cancel()
-
-        cancellation_task = asyncio.create_task(cancellation_watch())
+        cancellation_task = asyncio.create_task(
+            watch_private_generation(session, private, assistant.private_actions)
+        )
 
         async def close_memory():
             heartbeat_task.cancel()
             cancellation_task.cancel()
             await asyncio.gather(cancellation_task, return_exceptions=True)
             await asyncio.gather(heartbeat_task, return_exceptions=True)
+            await greeting.close()
             await private.cancel()
             try:
                 await private.service.release_owner(
@@ -377,9 +348,10 @@ async def entrypoint(ctx: JobContext):
     else:
         await session.start(room=ctx.room, agent=Assistant(ctx, chat_ctx, avatar))
     log_startup("session_started")
-    await ctx.connect()
+    if private is None:
+        await ctx.connect()
     log_startup("room_connected")
-    if private is None or private.owner_epoch == 1:
+    if private is None:
         await session.generate_reply(instructions="用中文简短问候用户。")
 
 

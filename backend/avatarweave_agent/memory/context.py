@@ -64,6 +64,8 @@ def build_context(request, *, loops=()):
         window = record.statement.valid_time
         text = (
             f"[{record.assertion_kind}; polarity={record.statement.polarity}; "
+            f"subject={'user_self' if record.statement.subject_id == request.scope.user_id else record.statement.subject_id}; "
+            f"predicate={record.statement.predicate}; "
             f"valid={window.start.isoformat() if window.start else 'unknown'}/"
             f"{window.end.isoformat() if window.end else 'open'}; evidence={hit.evidence_level}; use={hit.permitted_use}]\n"
             + record.display_text
@@ -207,8 +209,8 @@ class ContextMixin:
             async with self.database.sessions() as db:
                 account = await self._account(db, request.scope)
                 self._privacy(account, request)
-                if account.memory_revision != request.fence.memory_revision:
-                    raise MemoryFault("version_conflict", "Context snapshot is stale")
+                # The revision is an observation watermark. An unrelated new
+                # fact must not cancel this turn; validate the actual read set.
                 for hit in request.retrieved:
                     from sqlalchemy import select
 

@@ -451,6 +451,11 @@ class JobMixin:
                 if any(value.clarification for value in resolved.resolutions):
                     needs_confirmation = True
                     continue
+                linked = await self.link_event_update(scope, event, candidate)
+                if linked.requires_confirmation:
+                    needs_confirmation = True
+                    continue
+                candidate = linked.candidate
                 commit_id = hashlib.sha256(
                     (spec.job_id + candidate.candidate_id).encode()
                 ).hexdigest()

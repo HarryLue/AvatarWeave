@@ -57,7 +57,15 @@ def enclosing_clause(text, start, end):
 def display_statement(candidate, user_id):
     statement = candidate.statement
     if candidate.display_text == statement.canonical_value:
-        return statement.canonical_value
+        text = statement.canonical_value
+        expression = statement.valid_time.original_expression
+        if (
+            statement.predicate in {"plan", "important_event"}
+            and expression
+            and expression not in text
+        ):
+            text += "；时间：" + expression
+        return text
     labels = {
         "name": "姓名",
         "current_city": "居住城市",
@@ -75,6 +83,9 @@ def display_statement(candidate, user_id):
     if statement.qualifiers:
         names = {"context": "情境", "target": "对象", "relationship_type": "关系类型"}
         text += "（" + "；".join(names[q.key] + "：" + q.value for q in statement.qualifiers) + "）"
+    expression = statement.valid_time.original_expression
+    if statement.predicate in {"plan", "important_event"} and expression and expression not in text:
+        text += "；时间：" + expression
     return text
 
 
@@ -137,6 +148,34 @@ def same_value(a, b):
     )
 
 
+def supports_event_time(candidate, record):
+    old, new = record.statement, candidate.statement
+    if new.valid_time.precision != "instant" or new.polarity != old.polarity:
+        return False
+    keys = {(p.event_id, p.source_revision, p.start_char, p.end_char) for p in record.sources}
+    if not any(
+        (e.event_id, e.source_revision, e.start_char, e.end_char) in keys for e in candidate.sources
+    ):
+        return False
+    if not same_value(old, new):
+        from .time_expressions import meeting_topic
+
+        if len({(s.event_id, s.source_revision) for s in candidate.sources}) < 2 or not all(
+            re.search(r"会议|开会", s.canonical_value) for s in (old, new)
+        ):
+            return False
+        a, b = meeting_topic(old.canonical_value), meeting_topic(new.canonical_value)
+        if a and b and a != b:
+            return False
+    if old.valid_time.start is None or contains(old.valid_time, new.valid_time.start):
+        return True
+    return any(
+        re.search(r"改到|改成|改为|挪到|推迟到|提前到|更正", e.quote)
+        for e in candidate.sources
+        if (e.event_id, e.source_revision, e.start_char, e.end_char) not in keys
+    )
+
+
 def resolve_conflict(request: ConflictInput) -> ConflictOutput:
     candidate, rule = request.candidate, rule_for(request.candidate)
     if request.predicate_rule != rule:
@@ -176,6 +215,8 @@ def resolve_conflict(request: ConflictInput) -> ConflictOutput:
         action, confirmation = None, False
         if old_q != new_q:
             relation = "conditional_coexist"
+        elif rule.cardinality == "event" and supports_event_time(candidate, record):
+            relation, action = "support", "add_evidence"
         elif not overlaps(old.valid_time, new.valid_time):
             relation = "temporal_change"
         elif same_value(old, new) and (
@@ -234,6 +275,22 @@ def resolve_conflict(request: ConflictInput) -> ConflictOutput:
             )
     if any(p.action == "defer" for p in proposals):
         proposals = [p for p in proposals if p.action == "defer"]
+    elif (
+        rule.cardinality == "event"
+        and len(proposals) > 1
+        and all(p.action == "add_evidence" for p in proposals)
+    ):
+        # Reconcile a prior partial extraction without deleting either history.
+        targets = {r.ref.model_dump_json(): r for r in request.comparable_records}
+        refs = sorted(
+            [ref for p in proposals for ref in p.target_refs],
+            key=lambda ref: (
+                not same_value(targets[ref.model_dump_json()].statement, new),
+                targets[ref.model_dump_json()].recorded_at,
+                ref.object_id,
+            ),
+        )
+        proposals = [proposals[0].model_copy(update={"target_refs": refs})]
     elif not proposals:
         proposals = [
             MutationProposal(
@@ -257,6 +314,10 @@ def resolve_conflict(request: ConflictInput) -> ConflictOutput:
 def resolve_time(expression, anchor, timezone):
     if not expression:
         return TimeWindow(precision="unknown"), "unknown", None
+    from .time_expressions import resolve_clock
+
+    if clock := resolve_clock(expression, anchor, timezone):
+        return clock
     zone = ZoneInfo(timezone)
     local = anchor.astimezone(zone)
     start, end, precision, confidence = None, None, "unknown", "unknown"
@@ -306,17 +367,17 @@ def resolve_time(expression, anchor, timezone):
             date = local.date() + timedelta(
                 days=weekday - local.weekday() + (7 if match[1] == "下周" else 0)
             )
+            start, precision, confidence = (
+                datetime.combine(date, datetime.min.time(), zone),
+                "day",
+                "derived",
+            )
         elif expression in {"下周", "本周"}:
             date = local.date() + timedelta(
                 days=-local.weekday() + (7 if expression == "下周" else 0)
             )
             start = datetime.combine(date, datetime.min.time(), zone)
             end, precision, confidence = start + timedelta(days=7), "range", "derived"
-            start, precision, confidence = (
-                datetime.combine(date, datetime.min.time(), zone),
-                "day",
-                "derived",
-            )
         if precision == "day":
             end = start + timedelta(days=1)
     except ValueError:
@@ -343,6 +404,17 @@ def temporal(request: TemporalInput):
         raise MemoryFault("scope_mismatch", "Temporal anchor crosses scope")
     for candidate in request.candidates:
         expression = candidate.statement.valid_time.original_expression
+        if rule_for(candidate).cardinality == "event":
+            from .time_expressions import event_expression
+
+            # Prefer the user's concrete clock over a model's coarse date label.
+            expressions = {
+                value
+                for evidence in candidate.sources
+                if (value := event_expression(evidence.quote))
+            }
+            if len(expressions) == 1:
+                expression = expressions.pop()
         grounded = not expression or (
             expression in request.anchor_event.content
             and any(expression in evidence.quote for evidence in candidate.sources)

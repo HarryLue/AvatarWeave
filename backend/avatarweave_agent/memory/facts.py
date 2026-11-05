@@ -81,7 +81,9 @@ async def invalidate(db, account_id, refs, *, erase=False):
         )
         for edge in children:
             pending.append((edge.child_id, edge.child_version))
-            await db.execute(delete(Entity).where(Entity.account_id == account_id, Entity.id == edge.child_id))
+            await db.execute(
+                delete(Entity).where(Entity.account_id == account_id, Entity.id == edge.child_id)
+            )
             await db.execute(
                 update(DerivedView)
                 .where(
@@ -556,7 +558,11 @@ class FactMixin:
                     raise MemoryFault("manual_review_required", "Ambiguous fact is not committed")
                 # At-least-once extraction may produce a new candidate ID for the
                 # same evidence. Do not manufacture a confirmation/version/capsule.
-                if len(proposals) == 1 and proposals[0].action == "add_evidence":
+                if (
+                    len(proposals) == 1
+                    and proposals[0].action == "add_evidence"
+                    and len(proposals[0].target_refs) == 1
+                ):
                     prior = next(r for r in actual if r.ref == proposals[0].target_refs[0])
                     evidence_keys = {
                         (p.event_id, p.source_revision, p.start_char, p.end_char)
@@ -565,6 +571,9 @@ class FactMixin:
                     if all(
                         (e.event_id, e.source_revision, e.start_char, e.end_char) in evidence_keys
                         for e in candidate.sources
+                    ) and (
+                        rule_for(candidate).cardinality != "event"
+                        or candidate.statement.valid_time == prior.statement.valid_time
                     ):
                         visibility = self._visibility(account, None, [], [])
                         output = CommitOutput(
@@ -634,6 +643,15 @@ class FactMixin:
                 support = None
                 correction_id, correction_version = None, 1
                 for proposal in proposals:
+                    supporting = (
+                        [
+                            load_record(by_ref[(r.object_id, r.version)])
+                            for r in proposal.target_refs
+                        ]
+                        if proposal.action == "add_evidence"
+                        else []
+                    )
+                    primary = supporting[0] if supporting else None
                     for ref in proposal.target_refs:
                         if (ref.object_id, ref.version) in handled:
                             continue
@@ -667,7 +685,10 @@ class FactMixin:
                             await self._insert_version(db, historical, key)
                             committed.append(historical.ref)
                         elif proposal.action == "add_evidence":
-                            merged = {p.model_dump_json(): p for p in previous.sources + pointers}
+                            if ref != primary.ref:
+                                continue
+                            merged = {p.model_dump_json(): p for r in supporting for p in r.sources}
+                            merged.update({p.model_dump_json(): p for p in pointers})
                             if len(merged) > 64:
                                 raise MemoryFault(
                                     "budget_exceeded", "Evidence needs a source manifest batch"
@@ -682,8 +703,36 @@ class FactMixin:
                                     "system_to": None,
                                     "mentioned_at": now,
                                     "last_user_confirmed_at": now,
+                                    "sensitivity": max(
+                                        [candidate.sensitivity]
+                                        + [r.sensitivity for r in supporting],
+                                        key={
+                                            "normal": 0,
+                                            "private": 1,
+                                            "restricted": 2,
+                                        }.__getitem__,
+                                    ),
+                                    "importance": max(r.importance for r in supporting),
+                                    "user_pinned": any(r.user_pinned for r in supporting),
                                 }
                             )
+                            if (
+                                rule_for(candidate).cardinality == "event"
+                                and candidate.statement.valid_time.precision == "instant"
+                                and candidate.statement.valid_time != previous.statement.valid_time
+                            ):
+                                from .lifecycle import display_statement
+
+                                support = support.model_copy(
+                                    update={
+                                        "statement": candidate.statement,
+                                        "display_text": display_statement(
+                                            candidate, request.scope.user_id
+                                        ),
+                                        "assertion_kind": candidate.assertion_kind,
+                                        "last_user_confirmed_at": previous.last_user_confirmed_at,
+                                    }
+                                )
                         elif proposal.action == "retract":
                             from .tables import EvidenceSuppression
 

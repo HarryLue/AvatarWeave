@@ -21,9 +21,11 @@ from avatarweave_agent.memory.config import MemorySettings
 from avatarweave_agent.memory.contracts import PersonaCard
 from avatarweave_agent.memory.conversation import PrivateConversation
 from avatarweave_agent.memory.embedding import EmbeddingGateway
+from avatarweave_agent.memory.facts import load_record
 from avatarweave_agent.memory.gateway import ModelGateway
+from avatarweave_agent.memory.http import meta
 from avatarweave_agent.memory.service import MemoryService
-from avatarweave_agent.memory.storage import MemoryBase, MemoryDatabase
+from avatarweave_agent.memory.storage import MemoryBase, MemoryDatabase, MemorySession
 from avatarweave_agent.memory.tables import FactVersion, Job, OutputLedger
 from avatarweave_agent.memory.voice import MemoryAgentMixin
 from avatarweave_agent.pipeline import build_provider, load_pipeline
@@ -89,8 +91,13 @@ async def main():
     try:
         await database.create_schema()
         service = MemoryService(database, companions={"companion"})
-        scope = await account(service, "synthetic-provider-smoke-" + uuid4().hex)
+        subject = "synthetic-provider-smoke-" + uuid4().hex
+        scope = await account(service, subject)
         source = await event_request(service, scope)
+        async with database.sessions() as db:
+            source_event_room = (
+                await db.get(MemorySession, source.session_id)
+            ).room
         source = source.model_copy(
             update={
                 "event": source.event.model_copy(
@@ -111,6 +118,58 @@ async def main():
                 )
             )
             assert len(records) >= 2
+        event_refs = []
+        for text in ("下午有个会议", "下午3.00的会议"):
+            owner = await service.claim_owner(
+                scope, source.session_id, source_event_room, "worker"
+            )
+            await service.renew_owner(scope, source.session_id, "worker", owner)
+            event = source.event.model_copy(
+                update={
+                    "event_id": uuid4().hex,
+                    "turn_id": uuid4().hex,
+                    "content": text,
+                    "occurred_at": service.clock(),
+                    "received_at": service.clock(),
+                }
+            )
+            incoming = source.model_copy(
+                update={
+                    "event": event,
+                    "meta": meta(service, budget_ms=3000),
+                    "fence": source.fence.model_copy(update={"owner_epoch": owner}),
+                }
+            )
+            accepted = await service.input_event(incoming)
+            assert accepted.status == "ok", (
+                accepted.error.code if accepted.error else accepted.status
+            )
+            assert accepted.data.persisted
+            await service.next_job("provider-smoke", gateway, embedding)
+            event_refs.append(event.event_id)
+        async with database.sessions() as db:
+            meeting_records = [
+                load_record(row)
+                for row in await db.scalars(
+                    select(FactVersion).where(
+                        FactVersion.status == "active",
+                        FactVersion.system_to.is_(None),
+                        FactVersion.predicate.in_(["plan", "important_event"]),
+                    )
+                )
+            ]
+            assert len(meeting_records) == 1, (
+                "Synthetic meeting refinement was not unique"
+            )
+            meeting = meeting_records[0]
+            assert meeting.statement.valid_time.precision == "instant"
+            assert {p.event_id for p in meeting.sources} == set(event_refs)
+            assert "3.00" in meeting.display_text
+        # Resolve the same stable identity anew, then start a separate session.
+        assert (
+            await service.resolve_account("https://issuer.test", subject)
+            == scope.user_id
+        )
         view, _ = await session(service, scope)
         persona = PersonaCard(
             persona_id="companion",
@@ -151,7 +210,7 @@ async def main():
             await voice_session.start(agent, record=False)
             started = monotonic()
             handle = voice_session.generate_reply(
-                user_input="我叫什么名字，还记得我喜欢喝什么茶吗？"
+                user_input="还记得我吗？先说我的姓名，再说我喜欢喝什么茶。"
             )
             await asyncio.wait_for(capture.first.wait(), 20)
             async with asyncio.timeout(20):
@@ -176,6 +235,8 @@ async def main():
                         "real_extraction": True,
                         "real_embedding_dimensions": embedding.profile.dimensions,
                         "cross_session_facts": len(records),
+                        "two_utterance_meeting_refined": True,
+                        "natural_identity_query": True,
                         "voice_hooks": True,
                         "tts_samples_captured": capture.samples,
                         "first_frame_ms": round((capture.first_at - started) * 1000, 2),

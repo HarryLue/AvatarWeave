@@ -1,6 +1,7 @@
 """Trusted LiveKit adaptation: final sources, current context and generation fences."""
 
 import asyncio
+import re
 from datetime import timedelta
 from time import monotonic
 from uuid import uuid4
@@ -8,6 +9,7 @@ from uuid import uuid4
 from sqlalchemy import and_, exists, or_, select
 
 from .contracts import (
+    AdmissionInput,
     Budget,
     ContextInput,
     EmbeddingProfile,
@@ -244,7 +246,25 @@ class PrivateConversation:
                 raise MemoryFault(tone_result.error.code, tone_result.error.message)
             self.tone = tone_result.data.tone
             hits = []
-            if self.turn_memory_enabled and not greeting:
+            from .gateway import literal_self_name
+            from .time_expressions import event_expression
+
+            introduction = literal_self_name(
+                AdmissionInput(
+                    meta=meta(self.service),
+                    scope=self.scope,
+                    fence=self.fence,
+                    events=[event],
+                    memory_enabled=self.turn_memory_enabled,
+                    extraction_prompt_version="memory-extract.v1",
+                )
+            )
+            meeting_update = bool(
+                re.search(r"会议|开会", event.content)
+                and event_expression(event.content)
+                and not re.search(r"[？?]|几点|什么|哪|多少|记得|吗|是否", event.content)
+            )
+            if self.turn_memory_enabled and not greeting and not introduction:
                 query_result = await self.service.query(
                     QueryInput(
                         meta=meta(self.service, lane="dialogue"),
@@ -269,11 +289,24 @@ class PrivateConversation:
                         budget=budget,
                         include_historical=any(q.time_filter for q in query_result.data.queries),
                     ),
-                    self.embedding_gateway,
+                    None if meeting_update else self.embedding_gateway,
                 )
                 if recalled.status == "error":
                     raise MemoryFault(recalled.error.code, recalled.error.message)
                 hits = recalled.data.candidates
+                if meeting_update:
+                    # This turn supplies the new event details. The allowed raw
+                    # overlay retains preceding wording; do not bind the reply
+                    # to the event version its background job is about to replace.
+                    hits = [
+                        h
+                        for h in hits
+                        if not (
+                            h.record.statement.subject_id == self.scope.user_id
+                            and h.record.statement.predicate in {"plan", "important_event"}
+                            and re.search(r"会议|开会", h.record.statement.canonical_value)
+                        )
+                    ]
             loop_refs = (
                 await self.service.reserve_followup(self.scope, self.fence, self.generation_id)
                 if self.turn_memory_enabled
@@ -289,7 +322,7 @@ class PrivateConversation:
                     persona=self.persona,
                     tone=self.tone,
                     latest_event=event,
-                    recent_messages=list(self.recent_replies),
+                    recent_messages=[] if greeting else list(self.recent_replies),
                     summaries=[],
                     retrieved=hits,
                     active_loop_refs=loop_refs,

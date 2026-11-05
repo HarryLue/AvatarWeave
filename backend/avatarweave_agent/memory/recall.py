@@ -162,16 +162,72 @@ class RecallMixin:
                 base = base.where(FactVersion.system_to.is_(None))
             if not request.include_historical:
                 base = base.where(
-                    or_(FactVersion.valid_start.is_(None), FactVersion.valid_start <= self.clock()),
-                    or_(FactVersion.valid_end.is_(None), FactVersion.valid_end > self.clock()),
+                    or_(
+                        FactVersion.predicate.in_(["plan", "important_event"]),
+                        and_(
+                            or_(
+                                FactVersion.valid_start.is_(None),
+                                FactVersion.valid_start <= self.clock(),
+                            ),
+                            or_(
+                                FactVersion.valid_end.is_(None),
+                                FactVersion.valid_end > self.clock(),
+                            ),
+                        ),
+                    ),
                 )
             ranked, records, failures = defaultdict(list), {}, []
             participating = set()
+            profile_keys = set()
 
             # Independent branches have their own DB session. At most two branches
             # run here; per-query SQL in each branch is sequential and bounded.
             async def exact_branch():
                 async with self.database.sessions() as db:
+                    # The account's unique current self-name is useful across
+                    # sessions even for "还记得我吗". Resolve it deterministically,
+                    # with the same scope, privacy and evidence gates as other hits.
+                    profile_query = next(
+                        (
+                            q
+                            for q in request.queries
+                            if not q.entity_ids and not q.time_filter and q.purpose != "clarify"
+                        ),
+                        None,
+                    )
+                    if (
+                        profile_query
+                        and not request.include_historical
+                        and not request.read_system_as_of
+                    ):
+                        names = list(
+                            await db.scalars(
+                                base.where(
+                                    FactVersion.subject_id == request.scope.user_id,
+                                    FactVersion.predicate == "name",
+                                ).limit(3)
+                            )
+                        )
+                        if len(names) == 1:
+                            record = load_record(names[0])
+                            if (
+                                record.namespace == "life"
+                                and record.statement.polarity == "positive"
+                            ):
+                                key = (record.ref.object_id, record.ref.version)
+                                records[key] = record
+                                profile_keys.add(key)
+                                ranked[key].append(
+                                    CandidateRank(
+                                        ref=record.ref,
+                                        route="lexical",
+                                        query_id=profile_query.query_id,
+                                        rank=1,
+                                        raw_score=1.0,
+                                        summary_path=[],
+                                    )
+                                )
+                                participating.add("lexical")
                     for query in request.queries:
                         terms = lexemes(query.text)
                         filters = [
@@ -465,7 +521,13 @@ class RecallMixin:
                         )
                     )
                 visibility = self._visibility(account, None, [], [])
-            selected.sort(key=lambda r: r.final_score, reverse=True)
+            selected.sort(
+                key=lambda r: (
+                    (r.record.ref.object_id, r.record.ref.version) in profile_keys,
+                    r.final_score,
+                ),
+                reverse=True,
+            )
             selected = selected[: request.budget.max_candidates]
             output = RetrievalOutput(
                 candidates=selected,

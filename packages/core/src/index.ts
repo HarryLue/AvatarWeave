@@ -13,6 +13,7 @@ export interface ClientOptions {
   room?: Room;
   agentIdentity?: string;
   memorySessionId?: string;
+  privateReadyTimeoutMs?: number;
   manageTranscription?: boolean;
   renderer?: AvatarRenderer;
   onTranscript?: (message: Transcript) => void;
@@ -30,6 +31,9 @@ export class AvatarClient {
   private helloNonce?: string;
   private helloTargets = new Set<string>();
   private privateReady = false;
+  private privateReadyError?: Error;
+  private helloRetry?: ReturnType<typeof setInterval>;
+  private privateHandshake?: { promise: Promise<void>; resolve: () => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> };
   private audio = new Map<string, { element: HTMLMediaElement; track: RemoteTrack }>();
   private seenCommands = new Set<string>();
   private disposed = false;
@@ -80,8 +84,9 @@ export class AvatarClient {
     }
   }
   private resetPrivateActions() {
+    this.stopPrivateHandshake(new Error('账号对话连接已重置，请重新连接。'));
     this.actionsV2?.dispose(); this.actionsV2 = undefined;
-    this.privateReady = false; this.helloTargets.clear();
+    this.privateReady = false; this.privateReadyError = undefined; this.helloTargets.clear();
     if (!this.options.memorySessionId) return;
     const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
     this.helloNonce = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
@@ -91,16 +96,47 @@ export class AvatarClient {
       void this.room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(receipt)), { reliable: true, topic: 'avatarweave.receipt.v1' }).catch(e => this.report(e));
     });
   }
-  private sendHello(participant: RemoteParticipant) {
-    if (!this.options.memorySessionId || !this.helloNonce || this.room.state !== 'connected' || this.helloTargets.has(participant.sid)) return;
+  private stopPrivateHandshake(error?: Error) {
+    clearInterval(this.helloRetry); this.helloRetry = undefined;
+    const pending = this.privateHandshake;
+    this.privateHandshake = undefined;
+    if (pending) { clearTimeout(pending.timeout); if (error) pending.reject(error); else pending.resolve(); }
+  }
+  private waitForPrivateReady(): Promise<void> {
+    if (!this.options.memorySessionId || this.privateReady) return Promise.resolve();
+    if (this.privateHandshake) return this.privateHandshake.promise;
+    let resolve!: () => void, reject!: (error: Error) => void;
+    const promise = new Promise<void>((done, failed) => { resolve = done; reject = failed; });
+    const requested = this.options.privateReadyTimeoutMs;
+    const delay = requested !== undefined && Number.isFinite(requested) ? Math.min(60000, Math.max(1, requested)) : 20000;
+    const timeout = setTimeout(() => {
+      this.privateReadyError = new Error('账号对话连接超时，助手暂未就绪。请重新开始账号对话。');
+      this.stopPrivateHandshake(this.privateReadyError);
+    }, delay);
+    this.privateHandshake = { promise, resolve, reject, timeout };
+    this.helloRetry = setInterval(() => {
+      for (const participant of this.room.remoteParticipants.values()) if (this.isAgent(participant)) this.sendHello(participant, true);
+    }, 1000);
+    for (const participant of this.room.remoteParticipants.values()) if (this.isAgent(participant)) this.sendHello(participant);
+    return promise;
+  }
+  private sendHello(participant: RemoteParticipant, retry = false) {
+    if (!this.options.memorySessionId || !this.helloNonce || this.room.state !== 'connected' || (!retry && this.helloTargets.has(participant.sid))) return;
     this.helloTargets.add(participant.sid);
     const hello = { version: 1, session_id: this.options.memorySessionId, nonce: this.helloNonce };
     void this.room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(hello)), { reliable: true, topic: 'avatarweave.hello.v1' }).catch(e => { this.helloTargets.delete(participant.sid); this.report(e); });
   }
-  private reconnecting = () => { this.actionsV2?.dispose(); this.privateReady = false; };
+  private reconnecting = () => {
+    this.stopPrivateHandshake(new Error('账号对话连接已中断，正在重新连接。'));
+    this.actionsV2?.dispose(); this.privateReady = false;
+    if (this.options.memorySessionId) this.options.onState?.('connecting');
+  };
   private reconnected = () => {
     this.resetPrivateActions();
     for (const participant of this.room.remoteParticipants.values()) if (this.isAgent(participant)) this.agentState(participant);
+    if (this.options.memorySessionId) void this.waitForPrivateReady().catch(error => {
+      this.report(error); void this.room.disconnect().catch(error => this.report(error));
+    });
   };
   private transcriptKey(identity: string, id: string) { return JSON.stringify([identity, id]); }
   private emitStreamTranscript(message: Transcript, revision: number) {
@@ -120,6 +156,7 @@ export class AvatarClient {
   }
   private agentState(p: RemoteParticipant) {
     this.sendHello(p);
+    if (this.options.memorySessionId && !this.privateReady) { this.options.onState?.('connecting'); return; }
     const state = p.attributes?.['lk.agent.state'];
     if (state && ['listening', 'thinking', 'speaking'].includes(state)) this.markMilestone('agent_ready');
     this.options.onState?.(state ?? 'connected');
@@ -173,6 +210,7 @@ export class AvatarClient {
       try { const bootstrap = parseSessionBootstrap(JSON.parse(new TextDecoder().decode(payload)));
         if (bootstrap && bootstrap.session_id === this.options.memorySessionId && bootstrap.nonce === this.helloNonce) {
           this.actionsV2?.bootstrap(bootstrap.owner_epoch, bootstrap.generation_sequence, bootstrap.sequence_floor); this.privateReady = true;
+          this.stopPrivateHandshake(); this.agentState(participant);
         }
       } catch { /* A stale connection cannot bootstrap commands. */ }
       return;
@@ -197,7 +235,7 @@ export class AvatarClient {
       this.options.onCommand?.(command);
     } catch (e) { this.report(e); }
   };
-  private disconnected = () => { this.actionsV2?.dispose(); this.privateReady = false; this.transcriptSegments.clear(); this.clearAudio(); this.options.onState?.('disconnected'); };
+  private disconnected = () => { this.stopPrivateHandshake(new Error('账号对话连接已断开，请重新连接。')); this.actionsV2?.dispose(); this.privateReady = false; this.transcriptSegments.clear(); this.clearAudio(); this.options.onState?.('disconnected'); };
   private clearAudio() {
     for (const timer of this.audioChecks.values()) clearTimeout(timer);
     this.audioChecks.clear();
@@ -209,24 +247,32 @@ export class AvatarClient {
     this.milestones.clear();
     this.resetPrivateActions();
     this.options.onState?.('connecting');
-    await this.room.connect(credentials.server_url, credentials.participant_token);
-    this.markMilestone('room_connected');
-    await this.room.startAudio();
-    const agent = [...this.room.remoteParticipants.values()].find(p => this.isAgent(p));
-    if (agent) this.agentState(agent);
-    else this.options.onState?.('connected');
+    try {
+      await this.room.connect(credentials.server_url, credentials.participant_token);
+      this.markMilestone('room_connected');
+      await this.room.startAudio();
+      const agent = [...this.room.remoteParticipants.values()].find(p => this.isAgent(p));
+      if (agent) this.agentState(agent);
+      else this.options.onState?.(this.options.memorySessionId ? 'connecting' : 'connected');
+      await this.waitForPrivateReady();
+    } catch (error) {
+      this.stopPrivateHandshake(error instanceof Error ? error : new Error(String(error)));
+      if (this.options.memorySessionId) await this.room.disconnect();
+      throw error;
+    }
   }
   async sendText(text: string) {
     if (!text.trim()) return;
-    if (this.options.memorySessionId && !this.privateReady) throw new Error('账号对话正在连接，请稍后再试。');
+    if (this.options.memorySessionId && !this.privateReady) throw this.privateReadyError ?? new Error('账号对话正在连接，请稍后再试。');
     const info = await this.room.localParticipant.sendText(text, { topic: TOPICS.chat });
     this.options.onTranscript?.({ id: info.id, role: 'user', text, final: true, participantIdentity: this.room.localParticipant.identity });
   }
-  async setMicrophone(enabled: boolean) { if (enabled && this.options.memorySessionId && !this.privateReady) throw new Error('账号对话正在连接，请稍后再试。'); await this.room.localParticipant.setMicrophoneEnabled(enabled); }
-  async disconnect() { await this.room.disconnect(); this.clearAudio(); }
+  async setMicrophone(enabled: boolean) { if (enabled && this.options.memorySessionId && !this.privateReady) throw this.privateReadyError ?? new Error('账号对话正在连接，请稍后再试。'); await this.room.localParticipant.setMicrophoneEnabled(enabled); }
+  async disconnect() { this.stopPrivateHandshake(new Error('账号对话连接已取消。')); this.privateReady = false; await this.room.disconnect(); this.clearAudio(); }
   async dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopPrivateHandshake(new Error('账号对话连接已取消。'));
     this.actionsV2?.dispose();
     this.room.off(RoomEvent.ParticipantConnected, this.participantJoined);
     this.room.off(RoomEvent.TrackSubscribed, this.subscribed);

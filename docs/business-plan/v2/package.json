@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "description": "Reproducible investor deck authoring and PDF validation",
+  "dependencies": {
+    "pptxgenjs": "4.0.1",
+    "pdfjs-dist": "6.5.438",
+    "@napi-rs/canvas": "1.1.0"
+  }
+}

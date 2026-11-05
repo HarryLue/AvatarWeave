@@ -22,6 +22,8 @@ page.on('pageerror', error => errors.push(error.message));
 let memory = { memory_id: 'synthetic-memory', version: 1, text: '喜欢茉莉花茶', kind: 'preference', state: 'current', pinned: false, label: 'user_report', valid_time: { precision: 'unknown' }, evidence: [] };
 let loop = { loop_id: 'synthetic-loop', version: 1, title: '下周面试', event_time: { precision: 'unknown' }, status: 'planned', user_allows_followup: false };
 let people = [];
+let resumeError = false;
+let createError = false;
 let reflection = { reflection_id: 'reflection-fixture', version: 1, text: '你可能喜欢安静的休息方式', state: 'needs_confirmation' };
 const preferences = { preference_version: 1, long_term_memory_enabled: true, raw_transcript_days: 90, retain_evidence_capsules: true, allow_proactive_followup: false, allow_anniversary_recall: false, cross_companion_share: 'none', permitted_shared_predicates: [] };
 await page.route('**/api/**', async route => {
@@ -50,7 +52,16 @@ await page.route('**/api/**', async route => {
   else if (path === '/api/v2/open-loops/synthetic-loop') { loop = { ...loop, status: body.status, version: loop.version + 1 }; data = loop; }
   else if (path === '/api/v2/exports') data = { export_id: 'export-fixture', state: 'ready', download_handle: 'export-fixture', conflicts: [] };
   else if (path.startsWith('/api/v2/deletion-jobs/')) data = { physical_cleanup_complete: false };
-  else if (path === '/api/v2/sessions') data = { session_id: 'session-fixture', memory_enabled: body.memory_enabled, rtc: null };
+  else if (path === '/api/v2/sessions') {
+    if (createError) { await route.fulfill({ status: 503, json: { status: 'error', error: { code: 'storage_unavailable' } } }); return; }
+    data = { session_id: 'session-fixture', memory_enabled: body.memory_enabled, rtc: null };
+  }
+  else if (path.endsWith('/resume')) {
+    assert.equal(body.last_event_sequence, 0);
+    assert.ok(body.capabilities && body.idempotency_key);
+    if (resumeError) { await route.fulfill({ status: 422, json: { status: 'error', error: { code: 'invalid_model_output', message: 'Invalid request body' } } }); return; }
+    data = { session_id: 'session-fixture', memory_enabled: false, rtc: null };
+  }
   else if (path.endsWith('/end')) data = { session_id: 'session-fixture', status: 'ended' };
   else { await route.fulfill({ status: 404, json: {} }); return; }
   await route.fulfill({ json: path.startsWith('/api/v2/') ? { status: 'ok', data, error: null, trace_id: 'fixture' } : data });
@@ -99,6 +110,32 @@ try {
   await page.getByText('账号会话已建立，私人语音尚未启用。', { exact: true }).waitFor();
   assert.equal(writes.find(w => w.path === '/api/v2/sessions').body.memory_enabled, false);
   assert.ok(writes.some(w => w.path.endsWith('/session-fixture/end')));
+  // Reload/reconnect must send the strict resume body, without consuming a new slot.
+  const creates = writes.filter(w => w.path === '/api/v2/sessions').length;
+  const seedSession = () => page.evaluate(() => sessionStorage.setItem('avatarweave.private-session', JSON.stringify({ id: 'session-fixture', memory_enabled: false })));
+  await seedSession();
+  await page.getByRole('button', { name: '开始账号对话', exact: true }).click();
+  await page.waitForFunction(() => !sessionStorage.getItem('avatarweave.private-session'));
+  assert.equal(writes.filter(w => w.path === '/api/v2/sessions').length, creates);
+  assert.ok(writes.some(w => w.path.endsWith('/session-fixture/resume')));
+  // A validation/transient error preserves the reference and must not create a new session.
+  resumeError = true;
+  await seedSession();
+  await page.getByRole('button', { name: '开始账号对话', exact: true }).click();
+  await page.getByText('内容格式无法处理，请检查后重试。', { exact: true }).waitFor();
+  assert.equal(writes.filter(w => w.path === '/api/v2/sessions').length, creates);
+  assert.ok(await page.evaluate(() => !!sessionStorage.getItem('avatarweave.private-session')));
+  resumeError = false;
+  await page.getByRole('button', { name: '开始账号对话', exact: true }).click();
+  await page.waitForFunction(() => !sessionStorage.getItem('avatarweave.private-session'));
+  createError = true;
+  await page.getByRole('button', { name: '开始账号对话', exact: true }).click();
+  await page.getByText('记忆服务暂不可用，请稍后重试。', { exact: true }).waitFor();
+  const pendingCreate = writes.filter(w => w.path === '/api/v2/sessions').at(-1).body.idempotency_key;
+  createError = false;
+  await page.getByRole('button', { name: '开始账号对话', exact: true }).click();
+  await page.waitForFunction(() => !sessionStorage.getItem('avatarweave.private-session.pending'));
+  assert.equal(writes.filter(w => w.path === '/api/v2/sessions').at(-1).body.idempotency_key, pendingCreate);
   await page.screenshot({ path: '.runtime/memory-ui-smoke.png', fullPage: true });
   const renderer = await page.evaluate(async url => {
     const { AvatarRenderer } = await import(url);

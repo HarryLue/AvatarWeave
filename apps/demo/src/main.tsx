@@ -35,7 +35,7 @@ function App() {
   const [avatarId, setAvatarId] = useState('');
   const profile = avatars.find(a => a.id === avatarId);
   const [voice, setVoice] = useState('');
-  const bottom = useRef<HTMLDivElement>(null);
+  const messageList = useRef<HTMLDivElement>(null);
   const onReady = useCallback((value: AvatarRenderer | null) => { avatar.current = value; setReady(!!value); }, []);
   const onError = useCallback((e: Error) => setError(e.message), []);
   const connectionLog = useRef<((stage: string, at?: number, details?: Record<string, unknown>) => void) | null>(null);
@@ -85,7 +85,10 @@ function App() {
     fetch('/api/avatars').then(r => { if (!r.ok) throw new Error('无法加载数字人配置'); return r.json(); }).then(data => { setAvatars(data.avatars); setAvatarId(data.default_avatar); }).catch(onError);
   }, [onError]);
   function selectVoice(value: string) { setVoice(value); try { localStorage.setItem(`avatarweave.voice.${voiceInfo.provider}`, value); } catch { /* Session selection still works. */ } }
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => {
+    const list = messageList.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [messages]);
   async function connect() {
     // This ID only groups diagnostic logs; it must also work on HTTP origins.
     const attempt = `${Date.now()}-${++connectionAttempt.current}`;
@@ -142,6 +145,7 @@ function App() {
       onError(error as Error); await client.current?.dispose(); client.current = null;
       await endPrivateSession(credentials.session_id).catch(() => {});
       privateSession.current = null;
+      setState('disconnected'); setConnected(false); setMic(false);
     } finally { setBusy(false); }
   }
   async function disconnect() {
@@ -168,7 +172,7 @@ function App() {
     <header><a className="brand" href="/">◈ <span>AVATAR<span className="brand-light">WEAVE</span></span></a><div className="header-right"><span className="version">SDK 0.1</span><span className="status"><i className={connected ? 'online' : ''} />{labels[state] ?? state}</span></div></header>
     <section className="intro"><div><div className="eyebrow">REALTIME DIGITAL HUMAN</div><h1>让对话，<span>有温度。</span></h1><p>与你的数字人助手见面，开始一段自然的交流。</p></div><div className="mode">{mode === 'mock' ? '本地演示 · 文字模式' : (mode === 'pipeline' || mode === 'openai') ? '智能对话 · 语音模式' : '正在检查服务'}</div></section>
     <div className="workspace"><section className="stage"><div className="stage-label"><span className="dot" />AVATARWEAVE</div><div className="orb" /><div className="avatar">{profile && <AvatarView coreUrl={profile.assets.core_url} modelUrl={profile.assets.model_url} motionSyncUrl={profile.assets.motion_sync_url} draggable={profile.draggable} onReady={onReady} onError={onError} />}</div><div className="stage-footer"><div><strong>{profile?.name ?? '加载数字人…'}</strong><span>{ready ? '数字人已就绪 · 拖动可调整位置' : '正在加载数字人…'}</span></div><button className="icon-button" disabled={!ready} onClick={() => avatar.current?.resize()} title="重置位置">↺</button><button className="icon-button" disabled={!ready || !profile?.default_action} onClick={() => { void avatar.current?.execute(profile!.actions[profile!.default_action!]).catch(onError); }} title={profile?.default_action ? profile.actions[profile.default_action].label : '未配置默认动作'}>✦</button></div></section>
-    <section className="chat"><div className="chat-heading"><div><h2>对话空间</h2><span>每一次交流，都是新的开始</span></div><span className="chat-symbol">⌁</span></div>{voiceEnabled && <VoicePicker providerLabel={voiceInfo.provider_label} notice={voiceInfo.notice} canPreview={voiceInfo.capabilities.preview} voices={voices} selected={voice} disabled={connected || busy} accessKey={accessKey} onChange={selectVoice} onError={onError} />}<div className="messages" aria-live="polite">{!messages.length && <div className="empty"><div className="empty-icon">✳</div><h3>你好，很高兴见到你</h3><p>连接助手后，试着打个招呼<br />或者邀请数字人做个动作。</p><div className="suggestions">{['你好，介绍一下自己', '请做一个动作'].map(s => <button key={s} onClick={() => setText(s)}>{s} ↗</button>)}</div></div>}{messages.map(m => <div key={m.id} className={`message ${m.role}`}><span className="message-label">{m.role === 'user' ? '你' : profile?.name ?? '助手'}<time className="message-time" dateTime={new Date(m.receivedAt).toISOString()} title={new Date(m.receivedAt).toLocaleString('zh-CN')}>{messageTimeFormat.format(m.receivedAt)}</time></span><div>{m.text}{!m.final && <span className="cursor">▍</span>}</div></div>)}<div ref={bottom} /></div>
+    <section className="chat"><div className="chat-heading"><div><h2>对话空间</h2><span>每一次交流，都是新的开始</span></div><span className="chat-symbol">⌁</span></div>{voiceEnabled && <VoicePicker providerLabel={voiceInfo.provider_label} notice={voiceInfo.notice} canPreview={voiceInfo.capabilities.preview} voices={voices} selected={voice} disabled={connected || busy} accessKey={accessKey} onChange={selectVoice} onError={onError} />}<div className="messages" ref={messageList} aria-live="polite">{!messages.length && <div className="empty"><div className="empty-icon">✳</div><h3>你好，很高兴见到你</h3><p>连接助手后，试着打个招呼<br />或者邀请数字人做个动作。</p><div className="suggestions">{['你好，介绍一下自己', '请做一个动作'].map(s => <button key={s} onClick={() => setText(s)}>{s} ↗</button>)}</div></div>}{messages.map(m => <div key={m.id} className={`message ${m.role}`}><span className="message-label">{m.role === 'user' ? '你' : profile?.name ?? '助手'}<time className="message-time" dateTime={new Date(m.receivedAt).toISOString()} title={new Date(m.receivedAt).toLocaleString('zh-CN')}>{messageTimeFormat.format(m.receivedAt)}</time></span><div>{m.text}{!m.final && <span className="cursor">▍</span>}</div></div>)}</div>
     <form className="composer" onSubmit={send}><input aria-label="消息" value={text} onChange={e => setText(e.target.value)} placeholder={connected ? '输入消息，按回车发送…' : '连接后开始对话…'} maxLength={4000} /><button aria-label="发送" disabled={!connected || !text.trim()}>↑</button></form><div className="chat-note">{mode === 'mock' ? '演示模式提供真实房间连接和文字回复，语音需配置模型。' : '语音输入需要浏览器麦克风授权。'}</div></section></div>
     {memoryNotice && <p role="status">{memoryNotice}</p>}
     <MemoryPanel disabled={connected || busy || !ready} onConnect={connectPrivate} />

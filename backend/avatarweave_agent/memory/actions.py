@@ -1,6 +1,7 @@
 """Private v2 motion bridge; only the bound RTC participant can report progress."""
 
 import asyncio
+import logging
 from datetime import timedelta
 from uuid import uuid4
 
@@ -22,9 +23,11 @@ from .execution import MemoryFault
 from .http import meta
 from .tables import Generation
 
+logger = logging.getLogger(__name__)
+
 
 class PrivateActions:
-    def __init__(self, ctx, conversation, avatar):
+    def __init__(self, ctx, conversation, avatar, *, ready=True, on_connection_ready=None):
         self.ctx, self.conversation, self.avatar = ctx, conversation, avatar
         self.capabilities = ClientCapabilities.model_validate_json(
             conversation.session.capabilities_json
@@ -34,8 +37,17 @@ class PrivateActions:
         self.sequence = 0
         self.cancelled = set()
         self.hello_nonce = None
+        self.hello_floor = 0
+        self._on_connection_ready = on_connection_ready
+        self._announced_nonce = None
+        self._ready = asyncio.Event()
+        if ready:
+            self._ready.set()
         self.task = asyncio.create_task(self._consume())
         self.ctx.room.on("data_received", self._received)
+
+    def mark_ready(self):
+        self._ready.set()
 
     def _received(self, packet):
         if (
@@ -68,6 +80,7 @@ class PrivateActions:
                 continue
             try:
                 if isinstance(receipt, ClientHello):
+                    await self._ready.wait()
                     await self.bootstrap(receipt)
                     continue
                 saved = self.plans.get(receipt.command_id)
@@ -106,9 +119,13 @@ class PrivateActions:
                     "unknown",
                 }:
                     self.plans.pop(receipt.command_id, None)
-            except MemoryFault:
+            except (MemoryFault, SQLAlchemyError):
                 if isinstance(receipt, ActionReceipt):
                     self.plans.pop(receipt.command_id, None)
+            except Exception as error:  # noqa: BLE001 -- bounded client retries recover transient RTC failures
+                logger.warning(
+                    "private_receipt_failed", extra={"exception_type": type(error).__name__}
+                )
             finally:
                 self.queue.task_done()
 
@@ -138,7 +155,8 @@ class PrivateActions:
 
     async def bootstrap(self, hello):
         conversation = self.conversation
-        if self.hello_nonce is not None and self.hello_nonce != hello.nonce:
+        new_connection = self.hello_nonce != hello.nonce
+        if self.hello_nonce is not None and new_connection:
             await conversation.cancel()
             await self.cancel()
         async with conversation.service.database.sessions() as db:
@@ -152,7 +170,9 @@ class PrivateActions:
             current = await db.get(Generation, session.id)
             serial = current.serial if current else 0
         self.hello_nonce = hello.nonce
-        if self.plans:
+        if new_connection:
+            self.hello_floor = self.sequence
+        if new_connection and self.plans:
             from sqlalchemy import update
 
             from .tables import OutputLedger
@@ -167,19 +187,23 @@ class PrivateActions:
                     )
                     .values(state="unknown")
                 )
-        self.plans.clear()
+        if new_connection:
+            self.plans.clear()
         envelope = SessionBootstrap(
             version=1,
             session_id=conversation.session.id,
             nonce=hello.nonce,
             owner_epoch=conversation.owner_epoch,
             generation_sequence=serial,
-            sequence_floor=self.sequence,
+            sequence_floor=self.hello_floor,
             expires_at=conversation.service.clock() + timedelta(seconds=10),
         )
         await self.ctx.room.local_participant.publish_data(
             envelope.model_dump_json().encode(), reliable=True, topic=BOOTSTRAP_TOPIC
         )
+        if self._on_connection_ready and self._announced_nonce != hello.nonce:
+            self._on_connection_ready()
+            self._announced_nonce = hello.nonce
 
     async def publish(self, action_id, *, generation_id=None, fence=None):
         conversation = self.conversation

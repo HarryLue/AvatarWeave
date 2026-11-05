@@ -507,6 +507,20 @@ async def test_http_auth_csrf_schema_and_opaque_views(memory_http):
     assert (await client.post("/api/v2/sessions", json=body)).json()["data"]["session_id"] == view[
         "session_id"
     ]
+    resumed = await client.post(
+        f"/api/v2/sessions/{view['session_id']}/resume",
+        json={
+            "last_event_sequence": 0,
+            "capabilities": capabilities().model_dump(),
+            "idempotency_key": "resume-http",
+        },
+    )
+    assert resumed.status_code == 200 and resumed.json()["data"]["session_id"] == view["session_id"]
+    missing_sequence = await client.post(
+        f"/api/v2/sessions/{view['session_id']}/resume",
+        json={"capabilities": capabilities().model_dump(), "idempotency_key": "bad-resume-http"},
+    )
+    assert missing_sequence.status_code == 422
     huge = await client.post(
         "/api/v2/sessions", content=b"x" * 65537, headers={"Content-Type": "application/json"}
     )
