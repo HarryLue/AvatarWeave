@@ -165,27 +165,79 @@ class MemoryDatabase:
     """One bounded control pool per process; no implicit production DDL."""
 
     def __init__(self, url: str):
+        from . import tables  # noqa: F401 -- register the additive schema
+
         self.engine = make_engine(url)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def check_schema(self):
         async with self.sessions() as db:
             row = await db.get(SchemaVersion, 1)
-            if row is None or row.version != 1:
-                raise RuntimeError("Memory schema version 1 is required; run explicit migration")
+            if row is None or row.version != 3:
+                raise RuntimeError("Memory schema version 3 is required; run explicit migration")
 
     async def create_schema(self):
         """Only called by migration CLI and isolated tests."""
         from sqlalchemy import select
 
         async with self.engine.begin() as connection:
+            from sqlalchemy import inspect
+
+            exists = await connection.run_sync(
+                lambda sync: inspect(sync).has_table("vm_schema_version")
+            )
+            if exists:
+                version = await connection.scalar(
+                    select(SchemaVersion.version).where(SchemaVersion.id == 1)
+                )
+                if version not in {1, 2, 3}:
+                    raise RuntimeError("Unknown memory schema; refusing to mutate it")
+            if self.engine.dialect.name == "postgresql":
+                from sqlalchemy import text
+
+                await connection.execute(text("SET LOCAL statement_timeout = '30s'"))
+                await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await connection.run_sync(MemoryBase.metadata.create_all)
+            # v3 adds a rebuildable scoped exact-alias projection. No private
+            # source text is scanned and no existing fact/identity is reassigned.
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+            from .contracts import EntityCandidate
+            from .lifecycle import normalized
+            from .tables import Entity, EntityAlias
+
+            insert = pg_insert if self.engine.dialect.name == "postgresql" else sqlite_insert
+            stream = await connection.stream(
+                select(Entity.id, Entity.account_id, Entity.companion_id, Entity.entity_json)
+            )
+            async for rows in stream.partitions(100):
+                aliases = []
+                for entity_id, account_id, companion_id, encoded in rows:
+                    value = EntityCandidate.model_validate_json(encoded)
+                    from hashlib import sha256
+
+                    aliases.extend(
+                        {
+                            "account_id": account_id,
+                            "companion_id": companion_id,
+                            "entity_id": entity_id,
+                            "alias": name,
+                            "alias_key": sha256(name.encode()).hexdigest(),
+                        }
+                        for name in {normalized(s) for s in [value.canonical_name] + value.aliases}
+                        if name
+                    )
+                if aliases:
+                    await connection.execute(insert(EntityAlias).on_conflict_do_nothing(), aliases)
         async with self.sessions.begin() as db:
             version = await db.scalar(select(SchemaVersion))
-            if version is not None and version.version != 1:
+            if version is not None and version.version not in {1, 2, 3}:
                 raise RuntimeError("Unknown memory schema; refusing to downgrade")
             if version is None:
-                db.add(SchemaVersion(id=1, version=1))
+                db.add(SchemaVersion(id=1, version=3))
+            else:
+                version.version = 3
             if await db.get(QueueGuard, 1) is None:
                 db.add(QueueGuard(id=1, revision=0))
 

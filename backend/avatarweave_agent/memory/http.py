@@ -1,10 +1,6 @@
-"""Public P1 adapter: authentication constructs scope; clients cannot supply fences.
+"""Account-bound v2 projections; private RTC uses server-owned session references."""
 
-RTC credentials deliberately remain absent until P3/P5 hooks and cancellation
-are verified. Creating a session does not dispatch a private voice Worker yet.
-"""
-
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from uuid import uuid4
 
@@ -37,7 +33,7 @@ from .contracts import (
 from .execution import MemoryFault
 from .identity import AUTH_COOKIE, CSRF_COOKIE, IdentityService
 from .service import MemoryService
-from .storage import MemoryDatabase, PreferenceReceipt
+from .storage import MemoryDatabase
 
 router = APIRouter(prefix="/api/v2")
 
@@ -48,6 +44,8 @@ class MemoryRuntime:
     database: MemoryDatabase
     service: MemoryService
     identity: IdentityService
+    store: object | None = None
+    transfers: set[str] = field(default_factory=set)
 
     @classmethod
     async def open(cls, settings):
@@ -60,7 +58,23 @@ class MemoryRuntime:
         service = MemoryService(
             database, workspace_id=settings.workspace_id, companions={settings.companion_id}
         )
-        return cls(settings, database, service, IdentityService(settings, service))
+        from .archive import EncryptedObjectStore, FileKeyProvider
+
+        store = (
+            EncryptedObjectStore(
+                settings.archive_root,
+                FileKeyProvider(settings.archive_key_root),
+                settings.archive_key_version,
+            )
+            if settings.archive_root and settings.archive_key_root
+            else None
+        )
+        return cls(settings, database, service, IdentityService(settings, service), store)
+
+    async def close(self):
+        if self.store:
+            await self.store.close()
+        await self.database.close()
 
 
 def runtime(request):
@@ -159,10 +173,10 @@ def meta(service, lane="control", *, budget_ms=300):
         trace_id=uuid4().hex,
         now=now,
         deadline_at=now + timedelta(milliseconds=budget_ms),
-        algorithm_version="foundation.v1",
+        algorithm_version="voice-memory.v1",
         execution=ExecutionControl(
             lane=lane,
-            budget_profile_id="foundation-control.v1",
+            budget_profile_id="memory-" + lane + ".v1",
             cancellation_token_id=uuid4().hex,
             budget_ms=budget_ms,
             max_queue_wait_ms=0,
@@ -187,6 +201,13 @@ def fence_for(account):
 @router.get("/auth/login")
 async def login(request: Request):
     rt = runtime(request)
+    if str(request.base_url).rstrip("/") != rt.settings.public_origin:
+        # Secure state cookies must be created on the configured HTTPS origin.
+        return RedirectResponse(
+            rt.settings.public_origin + "/api/v2/auth/login",
+            status_code=303,
+            headers={"Cache-Control": "no-store"},
+        )
     # The signed temporary cookie is HttpOnly and bounded to the login handshake.
     request.session.clear()
     return await rt.identity.oauth.account.authorize_redirect(
@@ -278,51 +299,90 @@ async def update_preferences(request: Request):
     body = await body_as(request, UpdatePreferencesBody)
     if body is None:
         return invalid_body()
-    # P1 can grant initial consent. Subsequent changes need M19 invalidation and
-    # cancellation propagation, so fail explicitly instead of accepting unsafe updates.
-    async with rt.database.sessions.begin() as db:
-        row = await rt.service._account(db, scope_for(rt, account), lock=True)
-        receipt = await db.get(PreferenceReceipt, (account.id, body.idempotency_key))
-        if receipt:
-            if receipt.request_json != body.model_dump_json():
-                raise MemoryFault("version_conflict", "Idempotency key already used")
-            return response(PrivacyPreference.model_validate_json(receipt.result_json))
-        old = PrivacyPreference.model_validate_json(row.preferences_json)
-        candidate = PrivacyPreference(
-            **body.model_dump(exclude={"expected_version", "idempotency_key"}),
-            preference_version=old.preference_version + 1,
+    from .contracts import PrivacyInput
+    from .storage import Account
+
+    event, _ = await rt.service.control_event(
+        scope_for(rt, account),
+        key=body.idempotency_key,
+        operation="update_preferences",
+        body=body,
+        text="update_memory_preferences",
+    )
+    async with rt.database.sessions() as db:
+        account = await db.get(Account, account.id)
+    candidate = PrivacyPreference(
+        **body.model_dump(exclude={"expected_version", "idempotency_key"}),
+        preference_version=body.expected_version + 1,
+    )
+    result = await rt.service.privacy(
+        PrivacyInput(
+            meta=meta(rt.service),
+            scope=scope_for(rt, account),
+            fence=fence_for(account),
+            operation="update_preferences",
+            preferences=candidate,
+            target_refs=[],
+            target_source_ids=[],
+            target_time=None,
+            expected_preference_version=body.expected_version,
+            confirmed_control_event_id=event.event_id,
+            deletion_job_id=None,
         )
-        if row.source_watermark != 0:
-            raise MemoryFault(
-                "unsupported_capability", "Preference changes after input require M19"
-            )
-        if old.preference_version != body.expected_version:
-            raise MemoryFault("version_conflict", "Preferences changed")
-        if candidate.cross_companion_share != "none" or candidate.permitted_shared_predicates:
-            raise MemoryFault("unsupported_capability", "Cross-companion sharing is not enabled")
-        row.preferences_json = candidate.model_dump_json()
-        row.privacy_epoch += 1
-        db.add(
-            PreferenceReceipt(
-                account_id=account.id,
-                idempotency_key=body.idempotency_key,
-                request_json=body.model_dump_json(),
-                result_json=candidate.model_dump_json(),
-            )
-        )
+    )
+    if result.error:
+        raise MemoryFault(result.error.code, result.error.message, retryable=result.error.retryable)
     return response(candidate)
 
 
 async def session_view(rt, account, session_id):
     async with rt.database.sessions() as db:
         session = await rt.service._session(db, scope_for(rt, account), session_id)
+        rtc = None
+        if rt.settings.rtc_enabled and session.status != "ended":
+            from google.protobuf.json_format import ParseDict
+
+            from livekit import api
+
+            from ..config import settings
+            from ..session_options import SessionMetadata, SessionOptions
+            from .contracts import RtcCredentials
+
+            metadata = SessionMetadata(
+                avatarweave_session=SessionOptions(version=1, session_ref=session.id)
+            ).model_dump_json(exclude_none=True)
+            room_config = ParseDict(
+                {"agents": [{"agent_name": settings.agent_name, "metadata": metadata}]},
+                api.RoomConfiguration(),
+            )
+            token = (
+                api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
+                .with_identity(session.participant)
+                .with_ttl(timedelta(minutes=15))
+                .with_grants(
+                    api.VideoGrants(
+                        room_join=True,
+                        room=session.room,
+                        can_publish=True,
+                        can_subscribe=True,
+                        can_publish_data=True,
+                    )
+                )
+                .with_room_config(room_config)
+                .to_jwt()
+            )
+            rtc = RtcCredentials(
+                server_url=settings.rtc_public_url or settings.livekit_url,
+                participant_token=token,
+                expires_at=rt.service.clock() + timedelta(minutes=15),
+            )
         return PublicSessionView(
             session_id=session.id,
             companion_id=session.companion_id,
             status=session.status,
             memory_enabled=session.memory_enabled,
             account_required_for_save=True,
-            rtc=None,
+            rtc=rtc,
             resume_watermark=account.source_watermark,
         )
 
@@ -432,7 +492,13 @@ async def processing(session_id: str, request: Request):
                             states[event_id].state, states[event_id].state
                         )
                     ),
-                    index_state="completed" if event_id in data.indexed_event_ids else "pending",
+                    index_state="completed"
+                    if event_id in data.indexed_event_ids
+                    else "failed"
+                    if states[event_id].state == "failed"
+                    else "skipped"
+                    if states[event_id].state == "rejected"
+                    else "pending",
                     provisional=event_id not in data.structured_ready_event_ids,
                     observed_at=data.visibility.observed_at,
                     retry_after_ms=data.retry_after_ms,

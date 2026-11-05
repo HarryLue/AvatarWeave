@@ -1,4 +1,4 @@
-"""Explicit additive P1 migration. Never called by API/Worker startup."""
+"""Explicit additive memory schema v3 migration. Never called by API/Worker startup."""
 
 import argparse
 import asyncio
@@ -27,7 +27,7 @@ async def main():
         if args.apply:
             await database.create_schema()
         await database.check_schema()
-        print("Memory schema v1 verified")
+        print("Memory schema v3 verified")
     finally:
         await database.close()
 

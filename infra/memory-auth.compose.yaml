@@ -1,0 +1,19 @@
+# Optional single-machine development OIDC. Production can use any standard issuer.
+services:
+  memory-auth:
+    image: quay.io/keycloak/keycloak:26.8.1@sha256:3f3c5f8e03c614774b4bd9173b88391fefa4153bfc010d8012d59ad825377332
+    command: ["start-dev", "--import-realm"]
+    restart: unless-stopped
+    ports: ["127.0.0.1:18882:8080"]
+    environment:
+      KC_HOSTNAME: "${MEMORY_PUBLIC_ORIGIN:?Configure a canonical HTTPS origin}/idp"
+      KC_HTTP_RELATIVE_PATH: /idp
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - "${MEMORY_REALM_IMPORT_FILE:?Run init --local-auth first}:/opt/keycloak/data/import/avatarweave-memory-realm.json:ro"
+      - memory-auth-data:/opt/keycloak/data
+    mem_limit: 768m
+    cpus: 1
+volumes:
+  memory-auth-data:

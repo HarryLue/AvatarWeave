@@ -4,7 +4,6 @@
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
 import signal
 import socket
@@ -12,6 +11,8 @@ import subprocess
 import sys
 import time
 import urllib.request
+from datetime import datetime
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / ".runtime/dev.json"
@@ -61,6 +62,9 @@ def stop_tracked():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--external-livekit", action="store_true")
+    parser.add_argument(
+        "--env-file", type=Path, help="Additional protected deployment environment"
+    )
     action = parser.add_mutually_exclusive_group()
     action.add_argument(
         "--restart",
@@ -116,7 +120,23 @@ def main():
             cwd=ROOT / "backend",
         )
     )
-    env.update(values)
+    for key, value in values.items():
+        env.setdefault(key, value)
+    if args.env_file:
+        overlay = json.loads(
+            subprocess.check_output(
+                [
+                    str(python),
+                    "-c",
+                    "from dotenv import dotenv_values; import json,sys; print(json.dumps({k:v for k,v in dotenv_values(sys.argv[1]).items() if v is not None}))",
+                    str(args.env_file.resolve()),
+                ],
+                cwd=ROOT / "backend",
+            )
+        )
+        for key, value in overlay.items():
+            if key not in os.environ:
+                env[key] = value
     if args.kokoro_device is not None:
         env["KOKORO_DEVICE"] = args.kokoro_device
     if args.kokoro_gpu_id is not None:
@@ -127,6 +147,15 @@ def main():
         )
     )
     managed_kokoro = "kokoro" in config.get("local_services", [])
+    memory_enabled = env.get("MEMORY_ENABLED", "false").lower() in {"true", "1", "yes"}
+    if memory_enabled:
+        # Deployment may migrate explicitly; API/worker startup only checks.
+        subprocess.run(
+            [str(python), str(ROOT / "scripts/memory-schema.py")],
+            cwd=ROOT,
+            env=env,
+            check=True,
+        )
     ports = (
         ([8880] if managed_kokoro else [])
         + [5174, 8090, 8091]
@@ -223,6 +252,21 @@ def main():
             ("frontend", ["npm", "run", "dev", "--", "--strictPort"], ROOT, 5174),
         ]
     )
+    if memory_enabled:
+        commands.insert(
+            -1,
+            (
+                "memory-worker",
+                [
+                    str(python),
+                    str(ROOT / "scripts/memory-worker.py"),
+                    "--health-file",
+                    str(ROOT / ".runtime/memory-worker-health.json"),
+                ],
+                ROOT,
+                None,
+            ),
+        )
     children, records = [], []
     logs = ROOT / "logs"
     logs.mkdir(exist_ok=True)
@@ -262,7 +306,7 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     try:
         for name, command, cwd, port in commands:
-            stream = open(logs / f"{name}.log", "a", buffering=1)
+            stream = open(logs / f"{name}.log", "a", buffering=1)  # noqa: SIM115 -- owned until child exits
             stream.write(f"\n--- New run {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             log_start = (logs / f"{name}.log").stat().st_size
             child = subprocess.Popen(
@@ -281,7 +325,30 @@ def main():
             deadline = time.monotonic() + (180 if name == "kokoro" else 45)
             while True:
                 check_children()
+                if name == "memory-worker":
+                    try:
+                        health = json.loads(
+                            (ROOT / ".runtime/memory-worker-health.json").read_text()
+                        )
+                        if (
+                            health["pid"] == child.pid
+                            and health["state"] == "ready"
+                            and 0
+                            <= time.time()
+                            - datetime.fromisoformat(health["updated_at"]).timestamp()
+                            < 15
+                        ):
+                            break
+                    except (OSError, ValueError, KeyError):
+                        pass
                 try:
+                    if port is None:
+                        if time.monotonic() > deadline:
+                            raise RuntimeError(
+                                f"{name} did not become ready; see logs/{name}.log"
+                            )
+                        time.sleep(0.25)
+                        continue
                     with urllib.request.urlopen(
                         f"http://127.0.0.1:{port}/"
                         + (

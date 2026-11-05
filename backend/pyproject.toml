@@ -19,6 +19,8 @@ dependencies = [
   "misaki[zh]>=0.9.4,<0.10",
   "authlib>=1.6,<2",
   "itsdangerous>=2.2,<3",
+  "pgvector>=0.4,<0.5",
+  "cryptography>=46,<51",
 ]
 [project.optional-dependencies]
 google = ["livekit-plugins-google~=1.8"]

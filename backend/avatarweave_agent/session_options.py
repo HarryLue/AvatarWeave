@@ -10,6 +10,7 @@ from .voices import voice_service
 
 
 class SessionOptions(Versioned):
+    session_ref: str | None = Field(default=None, min_length=1, max_length=128)
     avatar_id: str | None = Field(default=None, min_length=1, max_length=128)
     tts_voice: str | None = Field(default=None, min_length=1, max_length=128)
 

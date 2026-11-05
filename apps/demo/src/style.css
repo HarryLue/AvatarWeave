@@ -11,3 +11,21 @@
 .voice-picker p { margin: 8px 0 4px; font-size: 12px; line-height: 1.6; color: #626c60; }
 .voice-picker small { font-size: 11px; color: #828b7f; }
 .voice-controls :disabled { opacity: .55; cursor: default; }
+
+.memory-panel { margin: 24px 0; padding: 24px; background: #fff; border: 1px solid #e8e6e1; border-radius: 18px; color: #333a34; }
+.memory-panel h2 { margin: 0 0 12px; font-size: 20px; }
+.memory-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.memory-panel button, .memory-login { margin: 4px; padding: 8px 14px; border: 1px solid #d9ded8; border-radius: 9px; background: #f4f6f2; color: #344839; cursor: pointer; }
+.memory-panel button:disabled { opacity: .5; cursor: default; }
+.memory-panel p { line-height: 1.6; }
+.memory-preferences { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 16px 0; }
+.memory-preferences input { margin-right: 8px; }
+.memory-preferences p { width: 100%; font-size: 13px; color: #6c746d; margin: 0; }
+.memory-tabs { padding-bottom: 12px; }
+.memory-tabs [aria-pressed=true] { background: #dfe8db; }
+.memory-list { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.memory-list li { padding: 18px; background: #fafbf9; border: 1px solid #eceee9; border-radius: 12px; overflow-wrap: anywhere; }
+.memory-label { font-size: 12px; color: #6d7b6b; margin-right: 12px; }
+.memory-list time { font-size: 12px; }
+.memory-edit, .memory-delete { padding: 20px; border: 1px solid #cad7c4; border-radius: 12px; background: #f3f7ef; }
+.memory-edit textarea { display: block; width: 100%; min-height: 90px; margin: 12px 0; padding: 10px; box-sizing: border-box; }

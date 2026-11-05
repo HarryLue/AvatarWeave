@@ -1,100 +1,70 @@
-# 语音记忆开发任务与阶段记录
+# 语音记忆开发任务与交付记录
 
-设计基线：[实施方案 v0.3](../voice-memory-implementation-plan.md)、[算法](../voice-memory-design/algorithms.md)、[运行算法](../voice-memory-design/runtime-and-longevity.md)、[联合验收](../voice-memory-design/engineering-slo.md)及 00—05 契约。用户本轮已授权开始开发；设计文档的“尚未授权实现”是此前的状态快照，不再作为开发暂停条件。
+更新日期：2026-11-04。设计基线为[实施方案 v0.3](../voice-memory-implementation-plan.md)、[算法](../voice-memory-design/algorithms.md)、[运行算法](../voice-memory-design/runtime-and-longevity.md)、[联合验收](../voice-memory-design/engineering-slo.md)及 00—05 契约。用户已授权实现并要求持续推进；原设计“尚未启动实现”是历史状态。本记录不改变原验收门槛。
 
-本文件记录代码实际覆盖范围，不修改原设计的验收门槛。**目前交付的是基础批次，完整 P1 和 P2—P7 均未验收；尚不能在现有语音产品中使用长期记忆。** 单元/数据库测试不是真实语音、L1 容量或十年质量验收。
+本次从 P0/P1 来源基础继续实现了事实、控制、检索、上下文、私人语音接入、后台任务、长期操作及前端管理闭环；随后补上增量维护、人物称呼索引、反思审核、完整来源图恢复和部署脚本。**代码与开发环境验证不能代替 P0—P7 的生产联合验收。** 操作见[运行与验证说明](runtime.md)。
 
-## 设计分析与依赖
+## 任务安排与实际状态
 
-1. 原工程只有 Conversation/Message 的房间级历史，没有可恢复身份；旧房间不能被昵称、客户端 identity 或共享 access key 认领。新增 `vm_*` 表与旧表不建立归属关系。
-2. 来源事件、结构化事实、向量、上下文和播放观测是五种不同对象。首先建立来源版本、持久提交与可见性；后续抽取不能将原始转写直接当成 active 事实。
-3. 双时间属于事实修订，不能用 SourceEvent.occurred_at/received_at 代替。当前批次转写修订已实现，MemoryRecord 的双时间契约已移植，**事实双时间存储与提交留给 VM-04**。
-4. 实时链路只做授权、短事务、覆盖层、有界检索与组装。抽取/向量/压缩/反思/归档放到持久后台；模型或对象 I/O 不进入持锁事务。
-5. 删除与纠正是控制链路，不能等异步向量；privacy、memory、owner、generation、source revision 的栅栏各有用途。当前只对来源写入/读取和会话租约实现对应检查，未声称完成输出取消或删除 DAG。
-6. SQLite 适合单元回归，PostgreSQL 必须另外验证。真实语音、冷热对象、恢复和多用户质量需要后续联合验收，不能从 schema 或普通 API 测试推断通过。
+单执行者按依赖顺序推进，未启动子代理。内部模块使用原 BaseModel 与 ModuleResult；新增 HTTP DTO、媒体握手单独记录，未改写原 166 个模型。
 
-依赖顺序：VM-01/02 → VM-03 → VM-04/05 → VM-06/07 → VM-08/09 → VM-10 → VM-11 → VM-12。单执行者顺序推进；本次没有启动多代理。
-
-## 任务安排
-
-| 任务 | P/M/T 与输入→输出（均以 ModuleResult 包装） | 可审查闭环和状态 |
+| 任务 | P/M/T；输入→输出 | 本次代码及边界 |
 | --- | --- | --- |
-| VM-01 | P0；00—05 全部 Contract；T01/T09 及契约不变量 | **基础代码完成**：166 个模型按原附件转为运行代码，逐模型 JSON Schema 对照测试；未知 schema、严格类型、结果形状、水位顺序。不是 26 个算法已完成。 |
-| VM-02 | P0；CapacityManifest、BudgetProfile、JointAcceptanceReport；T07/T10 | **进行中**：记录本地 hooks、隔离策略、开发数据库和池大小。待冻结供应商额度、硬件/进程清单、held-out、首发容量档；待实测文字/开场/语音的统一路径和设备播放。 |
-| VM-03 | P1/M22/M23/M26；IdentityInput→IdentityOutput、SessionInput→SessionOutput、InputEventInput→InputEventOutput、VisibilityReadInput→VisibilityReadOutput、RepositoryInput→RepositoryOutput；T01/T09 | **已实现子集**：OIDC HTTP 适配、issuer/sub 稳定账号映射、会话创建/恢复/结束、可信 Worker 租约基础、最终来源修订、同事务有界 outbox、来源精确读取/元数据、TTL 批次擦除、跨会话处理状态。待真实身份提供方、匿名受控会话、账号恢复、HTTP 字幕修订、统一 ModelTask 网关、真实 Worker 输入桥。 |
-| VM-04 | P1/P2/M01—M05/M26；Admission/Entity/Temporal/Conflict/Commit 的 Input→Output；T02/T06/T09 | **待开发**：谓词 registry、实体稳定 ID、来源区间逐字验证、双时间事实和胶囊/依赖表、确定性冲突、模型候选准入、事实键锁与不可变提交、纠正覆盖层。必须区分“过去住过”与“从未住过”。 |
-| VM-05 | P2/M19；PrivacyInput→PrivacyOutput；04 公开记忆/删除模型；T06/T09 | **待开发**：查看、pin、纠正、删除、记忆设置与记忆页；逻辑撤销先提交、epoch 递增、目标状态可查询；来源/派生/归档/导出传播、旧任务和恢复防复活。当前偏好接口只允许尚无来源时的初始选择。 |
-| VM-06 | P3/M11/M12/M24；QueryInput→QueryOutput、EmbeddingInput→EmbeddingOutput、RetrievalInput→RetrievalOutput；T02/T03/T10 | **待开发**：中文词法配置、同模型向量空间、单批 query embedding、精确事实/实体/时间通道、RRF、历史取消近期偏置、冷查 partial、独立池与最多四分支。参考 rag-zeroai 的 OpenAI 兼容接入，不能引入整套 RAG/Celery/Redis 作为捷径。 |
-| VM-07 | P3/M13—M15/M23；Context/Persona/OpenLoop 的 Input→Output、ModelTaskInput→ModelTaskOutput；T02/T07/T09 | **待开发**：每轮预算上下文与 Manifest、规则/角色版本、provisional 覆盖层、互动边界、待反馈事项；文字、主动开场、语音统一栅栏，记忆模式关闭预生成；普通路径无额外查询/语气模型。 |
-| VM-08 | P4/M17；JobInput→JobOutput；T06/T10 | **待开发**：outbox dispatcher、租约 claim/renew/complete/fail、有限退避、dead/obsolete、按用户公平调度、control/dialogue 保留配额；持久队列与供应商总配额共同有界。现有 outbox **尚无执行进程**。 |
-| VM-09 | P4/M06—M10/M18；Tiering/Compression/Reflection/Decay/Forget/Archive 的 Input→Output；T03—T05 | **待开发**：分层只搬位置，protected 全覆盖压缩，反思可撤销、独立用户确认强化，低权重不删除人生事实；加密开放格式、写/回读校验/切清单后撤在线副本。密钥和对象托管待选。 |
-| VM-10 | P5/M16；OutputInput→OutputOutput；T07 | **待开发**：v2 command/receipt、能力协商、生成/发布/开始/完成账本、实际媒体粒度、打断/迟到/重连、有限 detached 槽。v1 发送成功不能证明播放完成。 |
-| VM-11 | P6/M19/M20/M25；Privacy/Migration/Export 的 Input→Output；T06/T08 | **待开发**：完整删除、备份删除重放、版本化迁移与 dry-run、数据携带、恢复确认、切换审核和故障演练。 |
-| VM-12 | P6/P7/M21；EvaluationInput→EvaluationOutput、JointAcceptanceReport；T01—T10 | **待开发**：100 开发案例、≥1000 held-out 跨会话问题与关键分组、独立故障集；固定负载三次运行、后台干扰与恢复、真实设备音频、成本、盲评与灰度。报告未测 gate，不能用空分母或 mock 通过。 |
+| VM-01 | P0；00—05 Contract；T01/T09 | 166 模型已移植并逐项比对原 JSON Schema；严格类型、未知版本、水位及结果形状有回归。 |
+| VM-02 | P0；CapacityManifest/BudgetProfile/JointAcceptanceReport；T07/T10 | 有界执行器、独立进程、真实模型/媒体 hooks 检查、联合报告验证器已实现。供应商总额度、生产进程清单、held-out 和容量档未冻结，不声明 L1/L2/L3 通过。 |
+| VM-03 | P1/M22/M23/M26；Identity/Session/InputEvent/VisibilityRead/Repository 的 Input→Output；T01/T09 | OIDC+PKCE、稳定账号、恢复/租约、来源修订、同事务 outbox、TTL、水位、真实 Worker 文字/最终 ASR/开场桥已接。无记忆会话不存正文/派生；旧历史不归属私人账号。真实身份商及账号恢复待配置。 |
+| VM-04 | P1/P2/M01—M05/M26；Admission/Entity/Temporal/Conflict/Commit 的 Input→Output；T02/T06/T09 | 谓词 registry、实体匹配、逐字区间与语境、值/条件核验、双时间版本、胶囊、确定性冲突、事实键锁、纠正 suppression、反向失效已实现。人物新增/改名/别名/删除有明确确认与版本审计；确认人物后有界重试原始来源，不提高事实权威。同名保持歧义，唯一称呼才绑定；尚未提供实体合并/拆分操作。 |
+| VM-05 | P2/M19；PrivacyInput→PrivacyOutput、公开记忆模型；T06/T09 | 列表、证据、时间线、pin、原话修订、事实/自然语言纠正、删除进度、偏好、账号屏障及页面已接。先撤可见性及取消，再分批清理。备份清单未验证时保持 cleaning。 |
+| VM-06 | P3/M11/M12/M24；Query/Embedding/Retrieval 的 Input→Output；T02/T03/T10 | 精确/词法/实体/时间与 pgvector 路由、query 合批、RRF、历史去近期偏置、模型空间校验已实现。已明确的人物在词法、时间及向量 SQL 路线均先过滤主语，不混入其他人物的同类事实。语义超时明确 partial。当前是有界精确 pgvector 查询，未验证十年规模性能。 |
+| VM-07 | P3/M13—M15/M23；Context/Persona/OpenLoop/ModelTask 的 Input→Output；T02/T07/T09 | 逐轮预算/Manifest、不可信数据块、角色/短期语气、来源 overlay、事项保存/编辑及语音跟进已接。全局及单项双重许可、到期、非敏感有效事实、每轮最多一项、并发共享 72 小时尝试冷却；取消后旧生成失效。普通路径无额外查询/语气模型，私人预生成关闭，不自动推送。 |
+| VM-08 | P4/M17；JobInput→JobOutput；T06/T10 | 独立 Worker、dispatcher、持久 typed payload、claim/renew/complete/fail、有限抖动退避/租约、公平准入已实现。Outbox 与 Job 共同计入数量/字节/年龄上限，已分发抽取不重复计数。有持久游标的增量维护调度，自动补缺向量、核对来源索引水位、分批规划摘要/分层/反思及抽样验证归档；重启可继续。 |
+| VM-09 | P4/M06—M10/M18；Tiering/Compression/Reflection/Decay/Forget/Archive 的 Input→Output；T03—T05 | hot/warm 位置元数据可执行更新，cold 必须完成加密写入/回读/校验再标记；位置变化不制造事实版本。摘要保存来源 DAG 且 mandatory coverage=100%。反思持久为待确认假设，用户拒绝或以自己的表述确认；确认走新的合法用户来源，旧支持失效后禁止确认。保留在线原子事实，不自动依据衰减删除人生事实。 |
+| VM-10 | P5/M16；OutputInput→OutputOutput；T07 | v2 动作、nonce 握手、能力协商、账本、renderer 实际开始/结束/取消、owner/generation/读集合栅栏已接。旧 SpeechHandle 不采用新回合状态；重连不重放。TTS 帧不冒充设备已播放。 |
+| VM-11 | P6/M19/M20/M25；Privacy/Migration/Export 的 Input→Output；T06/T08 | v3 开放携带包包含历史事实版本、来源修订/原有 TTL、证据、会话、人物、摘要 DAG、事项、批准角色引用及反思。逐类清单计数/checksum、作用域、环、引用、纠正/删除及历史映射均预检；同事务重建并幂等，保留原权威，不激活导入角色或自动允许跟进。v2 只读并要求人工来源审查。当前单包各类最多 1000 对象、明文最多 8 MiB；超限明确拒绝，自动多分片携带尚未实现。 |
+| VM-12 | P6/P7/M21；EvaluationInput→EvaluationOutput、JointAcceptanceReport；T01—T10 | 独立观测评分、案例摘要、失败/超时保留分母、联合门槛验证及开发故障回归已实现。100 个相对年参数案例只是解析器回归；未做 ≥1000 held-out、关键组各 ≥100、三次固定负载、设备播放和用户灰度。 |
+| VM-13 | 部署交付；配置→迁移→进程管理 | `scripts/deploy-memory.sh` 复用原安装脚本，提供 up/install/init/migrate/start/restart/stop/status/check/credentials。受保护部署配置与根 `.env` 分离；可选本机 Docker OIDC 或外部 OIDC；API、Agent、记忆 Worker、前端统一管理，Worker 有启动健康状态。配置幂等、权限、HTTPS 跳转及 Compose 展开已验证。用户部署后补齐 `/api/` 的代理来源头，修复自重定向；真实 Nginx HTTP/HTTPS 回归、真实浏览器 OIDC 登录/退出通过。 |
 
-## 每批共用的工程要求
+## 关键实现决定
 
-- 允许修改 `backend/avatarweave_agent/memory/`、新增测试、公开 API/SDK/renderer 的对应适配、`scripts/memory-*.py` 和本目录记录；不修改受哈希保护的 provider。依赖更新必须进锁文件。原用户未提交文档保留。
-- 普通来源和检索使用 dialogue，明确控制使用 control，复杂回顾使用 deep_recall，抽取/归档使用 maintenance。浏览器不能提交 lane、Scope、版本栅栏或放大预算。当前执行器只供基础控制/来源服务，**没有实现完整部署级四通道资源系统**。
-- 公开边界只接受 04 模型；认证层构建 Scope。模型仅提议候选；引用在 SQL 授权域内校验。源码中的可信接口不等同可公开匿名 RPC。
-- 所有模型/embedding/对象 I/O 在事务外；短源/控制事务可锁账号计数行，事实提交只锁必要事实键并排序；不在整个推理期间锁住 memory_revision。
-- deadline 用单调计时执行，UTC 用于审计；父取消传入下游。当前短服务由 asyncio.timeout 取消并等待会话清理；后续不能强制停止的 CPU 推理单独计有限 detached 槽，不能套用短 I/O 的释放语义。
-- outbox 在同一事务入库；容量耗尽拒绝保存且完整回滚。任务必须校验 source version、privacy epoch 和目标事实版本。向量未就绪仍可从合法来源/覆盖层读取，不能误报事实已形成。
-- 每批保留成功语义、具体失败案例和实际检查。功能旗标关闭即可回退流量；保留新增表，不通过删新表回滚，不复活已删除内容。生产迁移/索引切换/部署另走明确实施步骤。
+1. **隔离**：仅信 OIDC issuer/sub 与服务端 Scope；昵称、room identity、共享 key 不能认领记忆。跨 companion 共享当前拒绝。OIDC 不绑定厂商，尚未选厂商不阻塞开发。
+2. **提交**：专属库 additive `vm_*` schema v3；显式升级回填可重建的人物别名投影。旧 Conversation/Message 不迁移归属。事实键排序锁及短事务；模型/向量/对象 I/O 在事务外。原文默认 90 天；来源/结构化/索引分别报告。数据库版本与携带包版本分别管理。
+3. **证据**：最终合法用户来源、逐字区间、值及比较条件均需服务验证。唯一逐字 quote 可对齐 Unicode 并扩为完整分句，不模糊补字；展示由注册谓词和值构造，不采信模型额外陈述。旧源不能重抽取覆盖纠正。
+4. **栅栏**：memory_revision 是水位；输出校验实际事实/来源读集合。无关新增不强制打断，相关纠正/删除/隐私变化立即失效。每个 SpeechHandle 捕获 generation/OutputPlan，晚到 TTS/工具不读下一回合全局状态。
+5. **资源**：每进程 DB 池 2/overflow 0/等待 100ms；PG lock/statement 初值 50/150ms。执行器总 8，control/dialogue/deep_recall/maintenance 为 2/4/1/1，逐用户为 1/2/1/1，无无界等待。物理对象线程限 2，取消后占位至真正结束并报告 detached_bounded。跨进程额度需真实 CapacityManifest 约束。
+6. **删除**：先逻辑屏障，后分批物理清理；对象 staged intent 先提交，文件锁及持久撤销标记防延迟 writer 复活。签名 SQLite 删除日志独立于 PG 快照，但同机开发文件不等于生产独立备份。无实际备份盘点不标物理完成。
+7. **维护**：分层/遗忘不自动改变真值；在线原子事实保留，归档返回 `may_remove_online_copy=False`。摘要/反思不替代原子证据。调度器自动补建当前 profile 的缺失向量；来源贡献的所有当前事实完成索引后才推进 settled 水位。替换 profile 仍需显式 migration/reindex 与切换审核。
+8. **媒体**：仅报告实际可观测粒度；浏览器当前无设备音频回执。Live2D completion 来自有限动作真实 motionFinish；发送成功/函数返回/first frame 不是 completion。
 
-## 本批实现说明
+## 数据库与模型环境
 
-代码位于 `backend/avatarweave_agent/memory/`：
+- 用户提供的 PG 上已创建专用 `avatarweave_memory_dev`，pgvector **0.8.1**；本次显式迁移并验证 **schema v3**，未迁移旧业务库。启动不隐式 DDL。
+- 破坏性回归只用本机 `avatarweave-memory-test` 的 `127.0.0.1:55436/avatar_memory_test`，不对开发库 drop_all。
+- embedding 通过 `MEMORY_EMBEDDING_REFERENCE_ENV` 引用 `/data/luwei/rag-zeroai` 受保护配置。真实 `qwen3.7-text-embedding-flash` 返回 **1024** 维（请求 1536 也返回 1024），显式 profile 因此固定 1024，不接受漂移。该候选 profile 不证明供应商权重不可变。
+- 开发对象密钥已生成，文件 0600、目录 0700；`.env`/`.runtime` 被忽略，不提交密码/原文/导出包。依赖锁定；受保护 provider 未修改。私人 SDK 录制项全部显式关闭，避免音频/日志/trace 旁路保留。
 
-- `contracts.py`：设计附件 00—05 的完整类型，少量仅等价的格式整理；尚未加进服务的模型仅是契约。
-- `storage.py`：独立 additive schema v1、账号/登录/会话/来源修订/引用 outbox/控制幂等凭据；与旧历史隔离。每进程连接池上限 2、overflow 0、池等待 100 ms；PostgreSQL lock/statement timeout 起点 50/150 ms。没有据此声称吞吐已通过。
-- `identity.py`：Authlib Authorization Code + S256 PKCE，issuer/audience/nonce/state/签名/时效由库与边界校验；账号仅映射 issuer/sub。浏览器使用随机 opaque 登录 cookie，库中只存随机 token 的 SHA-256，不持久第三方 access/id token。
-- `service.py`：来源持久化与队列同事务；来源新修订使旧源不可读取、旧任务 obsolete；连续水位取首个未完成洞；精确源读取检查当前版本、SQL 作用域、epoch 与 TTL；原文过期只读元数据，显式批次清理正文。尚无事实/摘要/向量，因此不能用这段来源修订替代 P2 的派生失效实现。
-- `execution.py`：进程内最多 8 个基础调用、每用户 2 个、无等待队列；超额明确 overloaded；异步取消与事务上下文清理；执行报告不含正文。跨进程公平/供应商配额属于 VM-08，不冒充已经实现。
-- `http.py`：账号、初始偏好、受控会话和处理状态的公开投影；64 KiB 正文上限、Origin+CSRF、严格 JSON、幂等、no-store 和 OpenAPI 请求 schema。尚未开放记忆 CRUD 或带正文的浏览器输入 RPC。
-- `api.py`/`worker.py`：预留 `vm-` 私人房间，旧 demo Token API 拒绝加入，旧 Worker 在连接/读取历史前拒绝启动私人语音。PublicSessionView.rtc 为 null，等待 VM-07/10 验证后才开放，避免把来源框架误当可用语音记忆。
+## 本次验证证据
 
-原文默认 90 天。`expire_raw_batch` 只是有界清理原语，尚未自动调度；未接任务进程前不开放真实私人输入。来源/索引状态分开显示，不返回完整提示、Scope、对象路径或私有执行 handle。
-
-## 身份与基础设施决策
-
-- 用户尚未选择身份提供方。当前使用标准 OIDC 适配层，生产 `MEMORY_ENABLED=false`；无需阻塞代码和隔离测试。真实厂商配置、账号恢复策略、公开 HTTPS 回调和密钥保管待上线前落实。
-- 已在用户提供的 PostgreSQL 实例上创建全新开发库 `avatarweave_memory_dev`，确认并启用 pgvector **0.8.1**，初始化本批 `vm_*` 表。连接信息只保存在被 Git 忽略的 `.env`；没有改旧业务库。当前应用未切流或重启。
-- 回归使用独立本机容器 `avatarweave-memory-test`（仅绑定 `127.0.0.1:55436`），绝不把开发/生产库设为 POSTGRES_TEST_URL。测试会删除自己的 `vm_*` 测试表。
-- `/data/luwei/rag-zeroai/app/services/model_manager.py` 采用 OpenAI 兼容 embeddings。该项目 `.env` 提供 endpoint/key，但没有显式 embedding 模型配置；`config.py` 默认 DashScope text-embedding-v4/1536，部分注释仍提 v3。VM-06 必须显式冻结真正 model/profile/dimensions、响应 usage 与批量上限，逐返回校验维度/有限值/非零范数，不复制占位模型名。**本批未调用 embedding 服务、未复制其密钥、未创建向量索引。**
-
-本地检查版本：LiveKit Agents 1.8.9、Pydantic 2.14.1、SQLAlchemy 2.0.55、asyncpg 0.32.0、Authlib 1.9.3，依赖以 `backend/uv.lock` 为准。
-
-## 验证与未完成关口
-
-检查命令：
-
-```bash
-npm run check
-backend/.venv/bin/python -m pytest backend/tests -q
-backend/.venv/bin/ruff check backend/avatarweave_agent/memory backend/tests/test_memory* scripts/memory-schema.py
-backend/.venv/bin/python scripts/config-schema.py --check
-backend/.venv/bin/python scripts/check-config.py
-# 使用独立测试库再执行同组后端测试：
-TEST_DATABASE=postgres POSTGRES_TEST_URL=postgresql+asyncpg://.../isolated_test_db backend/.venv/bin/python -m pytest backend/tests -q
-```
-
-迁移命令 `backend/.venv/bin/python scripts/memory-schema.py` 默认只检查；`--apply` 才建表。必须显式设置 MEMORY_DATABASE_URL，不从旧 DATABASE_URL 猜测；API/Worker 启动不会自动迁移记忆表，未知 schema 拒绝启动。
-
-基础回归覆盖账号映射、跨账号/companion/workspace 拒读、同域幂等、来源新修订、旧任务失效、无记忆模式无源/任务、未最终 ASR 拒绝、epoch/owner 栅栏、租约重领、队列拒绝回滚、连续水位、跨会话 provisional、TTL 后证据降级、取消/超时释放。OIDC 使用隔离的模拟服务与真实 RSA 签名，覆盖正常 Code+PKCE 及错误 nonce/issuer/audience/期限/state；这不是已接入真实厂商的声明。
-
-本批最终检查结果：
-
-| 检查 | 实际结果 |
+| 检查 | 2026-11-04 实际结果 |
 | --- | --- |
-| 后端全量，隔离 SQLite | 66 passed；含本批新增的 31 项回归；现有 provider 的 11 条弃用警告未修改。 |
-| 后端全量，隔离 PostgreSQL | 66 passed，同一组测试；没有使用开发库运行破坏性测试。 |
-| 契约一致性 | 166 个模型的 JSON Schema 与设计附件一致，计入上述回归。 |
-| npm run check | 构建、类型检查和 17 项 SDK 测试通过；现有 bundle 大小提示仍在。 |
-| Ruff、git diff --check | 本批 Python 文件与补丁检查通过。 |
-| config-schema.py --check / check-config.py | 通过；现有 provider 配置未改。 |
-| 开发库基础设施 | 新库及 pgvector 0.8.1、memory schema v1 实际验证；应用开关关闭。 |
+| 后端全量 SQLite | **214 passed**，现有 provider 11 条弃用警告。 |
+| 后端全量独立 PostgreSQL/pgvector | **214 passed**，开发库不参与破坏性测试。 |
+| 原始契约比对 | 原 166 模型 JSON Schema 与附件一致，计入后端回归。 |
+| `npm run check` | 工作区构建、类型检查、**24 项测试通过**；现有 bundle 大小提示。 |
+| 浏览器 | fixture HTTP 驱动事实纠正/删除、人物新增/改名/删除、事项、推测确认和导出界面；Vite 阻止读取 `.env` 与运行时合成凭据文件；**真实 Live2D** started→completed / started→cancelled。不是实际 OIDC 或设备音频验收。 |
+| 真实模型链路 | 两条合成事实经真实抽取及 1024 维 embedding，在新会话实际回复命中姓名/偏好；TTS 捕获 **97344 samples**，最终复测首帧 **2107.65ms**。不是容量、设备播放或质量通过声明。 |
+| 代码/配置 | Ruff、diff 检查、config-schema/check-config 通过。 |
+| 开发库迁移/任务入口 | `memory-schema.py --apply` 返回 `Memory schema v3 verified`；`memory-worker.py --once --health-file ...` 完成真实维护检查并输出受保护的健康状态；未切流/重启。 |
+| 部署脚本 | Shell 语法、帮助、配置初始化幂等、凭据权限、登录服务切换、配置失败不写文件、Compose config 校验通过。仅检查临时目录；没有运行安装/发布/认证容器。 |
+| 部署后登录修复 | 公网入口由自跳转 303 恢复为跳向认证端点的 302；discovery 200。真实浏览器使用开发账号登录后为 account、CSRF 退出后为 anonymous；TLS 校验开启。新增真实 Nginx HTTP/HTTPS 转发回归，临时配置/端口独立于业务 Nginx。 |
 
-SQLite 的异步线程在受限沙箱中等待，已停止这两次挂起进程；最终 SQLite 和 PostgreSQL 回归均在获准的沙箱外执行。临时 PostgreSQL 测试容器在回归后停止，开发库保留。
+故障回归包含越权、签名/CSRF、TTL/来源修订、否定语境、A→B→A、纠正 suppression、重复确认/任务重试、旧租约、取消后对象写、导出/删除日志篡改、恢复漏账、账号分批擦除、晚到 TTS、重连 nonce/序号下限、renderer 取消、事项双重授权/并发冷却/取消读集合。
 
-未完成：真实登录厂商、完整 P1 身份/输入桥、P2 事实和控制 UI、P3 检索/上下文、P4 后台/冷热、P5 实际媒体账本、P6 十年/恢复/联合验收和 P7 灰度。G01—G13 均未整体测量；无任何 L1/L2/L3 容量或十年记忆质量通过声明。
+线程/网络/浏览器检查按环境权限在获准的沙箱外执行。临时服务和测试容器验证后停止，不停止既有业务进程。
+
+## 发布关口与回退
+
+根 `.env` 的记忆开关默认关闭；用户部署配置可明确开启开发体验。回退撤私人流量，保留表/删除日志，不通过删表或复活内容回滚。开发环境登录修复已平滑重载 Nginx；未执行生产索引切换或账号迁移。
+
+尚有实现边界：实体合并/拆分；超出当前上限的多分片携带；回收在线大正文/向量后的冷目录切换。现有实现保留数据、显式拒绝超限或要求消歧，不以静默丢弃规避这些边界。因而不能把“模块入口都有代码”写成“完整十年方案全部开发验收完成”。
+
+待落实及独立验收：正式 OIDC/账号恢复（开发 OIDC/HTTPS 已联调）；生产对象/密钥托管及独立备份删除清单；供应商/进程额度；隔离备份恢复演练；held-out 与压缩人审；固定档三次联合负载；设备音频与 P7 用户灰度。缺失项不填 passed；G01—G13 无整体通过声明。

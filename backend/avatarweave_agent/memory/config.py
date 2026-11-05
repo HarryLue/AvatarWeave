@@ -1,5 +1,7 @@
 """Memory rollout settings, independent of the existing provider configuration."""
 
+from pathlib import Path
+
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,6 +11,7 @@ from ..config import ROOT
 class MemorySettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", env_prefix="MEMORY_", extra="ignore")
     enabled: bool = False
+    rtc_enabled: bool = False
     database_url: str = Field(default="", repr=False)
     workspace_id: str = "default"
     companion_id: str = "companion"
@@ -18,6 +21,16 @@ class MemorySettings(BaseSettings):
     oidc_client_secret: SecretStr = SecretStr("")
     session_secret: SecretStr = SecretStr("")
     login_ttl_seconds: int = Field(default=86400, ge=300, le=604800)
+    embedding_reference_env: Path | None = None
+    embedding_base_url: str = ""
+    embedding_api_key: SecretStr = SecretStr("")
+    embedding_model: str = ""
+    embedding_dimensions: int = Field(default=1024, ge=1, le=16000)
+    embedding_revision: str = "configured.v1"
+    archive_root: Path | None = None
+    archive_key_root: Path | None = None
+    archive_key_version: str = "v1"
+    deletion_journal_path: Path | None = None
 
     @model_validator(mode="after")
     def configured_when_enabled(self):

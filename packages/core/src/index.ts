@@ -1,18 +1,24 @@
+import { ActionController, parseActionEnvelope, parseSessionBootstrap } from './actions-v2.js';
+export * from './actions-v2.js';
 import { Room, RoomEvent, Track, ParticipantKind, type RemoteParticipant, type RemoteTrack, type RemoteAudioTrack, type RemoteTrackPublication } from 'livekit-client';
-import { TOPICS, parseAvatarCommand, type AvatarCommand } from './protocol.js';
+import { TOPICS, parseAvatarCommand, parseMemoryStatus, type AvatarCommand, type MemoryStatus } from './protocol.js';
 export * from './protocol.js';
 export interface Credentials { server_url: string; participant_token: string }
 export interface Transcript { id: string; role: 'user' | 'agent'; text: string; final: boolean; participantIdentity: string }
-export interface AvatarRenderer { setAudio(stream: MediaStream | null): void; execute(command: AvatarCommand): void | Promise<void> }
+export interface AvatarRenderer { setAudio(stream: MediaStream | null): void; execute(command: AvatarCommand): void | Promise<void>;
+  executeTracked?: import('./actions-v2.js').TrackedRenderer['executeTracked'];
+}
 export type ConnectionMilestone = 'room_connected' | 'agent_ready' | 'first_audio_playback';
 export interface ClientOptions {
   room?: Room;
   agentIdentity?: string;
+  memorySessionId?: string;
   manageTranscription?: boolean;
   renderer?: AvatarRenderer;
   onTranscript?: (message: Transcript) => void;
   onState?: (state: string) => void;
   onCommand?: (command: AvatarCommand) => void;
+  onMemoryStatus?: (status: MemoryStatus) => void;
   onError?: (error: Error) => void;
   onConnectionMilestone?: (stage: ConnectionMilestone, at: number) => void;
 }
@@ -20,6 +26,10 @@ export interface ClientOptions {
 export class AvatarClient {
   readonly room: Room;
   private options: ClientOptions;
+  private actionsV2?: ActionController;
+  private helloNonce?: string;
+  private helloTargets = new Set<string>();
+  private privateReady = false;
   private audio = new Map<string, { element: HTMLMediaElement; track: RemoteTrack }>();
   private seenCommands = new Set<string>();
   private disposed = false;
@@ -32,12 +42,15 @@ export class AvatarClient {
     this.options = options;
     this.ownsRoom = !options.room;
     this.room = options.room ?? new Room({ adaptiveStream: true, dynacast: true });
+    this.resetPrivateActions();
     this.room.on(RoomEvent.ParticipantConnected, this.participantJoined);
     this.room.on(RoomEvent.TrackSubscribed, this.subscribed);
     this.room.on(RoomEvent.TrackUnsubscribed, this.unsubscribed);
     this.room.on(RoomEvent.ParticipantAttributesChanged, this.attributes);
     this.room.on(RoomEvent.DataReceived, this.data);
     this.room.on(RoomEvent.Disconnected, this.disconnected);
+    this.room.on(RoomEvent.Reconnecting, this.reconnecting);
+    this.room.on(RoomEvent.Reconnected, this.reconnected);
     if (options.manageTranscription !== false) this.room.registerTextStreamHandler(TOPICS.transcription, async (reader, info) => {
       const participant = this.room.remoteParticipants.get(info.identity);
       const local = info.identity === this.room.localParticipant.identity;
@@ -62,9 +75,33 @@ export class AvatarClient {
       } catch (e) { this.report(e); }
     });
     for (const p of this.room.remoteParticipants.values()) {
+      if (this.isAgent(p)) this.agentState(p);
       for (const pub of p.trackPublications.values()) if (pub.track) this.subscribed(pub.track, pub, p);
     }
   }
+  private resetPrivateActions() {
+    this.actionsV2?.dispose(); this.actionsV2 = undefined;
+    this.privateReady = false; this.helloTargets.clear();
+    if (!this.options.memorySessionId) return;
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    this.helloNonce = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+    const renderer = this.options.renderer;
+    if (renderer?.executeTracked) this.actionsV2 = new ActionController(this.options.memorySessionId, { executeTracked: (...args) => renderer.executeTracked!(...args) }, receipt => {
+      if (this.room.state !== 'connected') return;
+      void this.room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(receipt)), { reliable: true, topic: 'avatarweave.receipt.v1' }).catch(e => this.report(e));
+    });
+  }
+  private sendHello(participant: RemoteParticipant) {
+    if (!this.options.memorySessionId || !this.helloNonce || this.room.state !== 'connected' || this.helloTargets.has(participant.sid)) return;
+    this.helloTargets.add(participant.sid);
+    const hello = { version: 1, session_id: this.options.memorySessionId, nonce: this.helloNonce };
+    void this.room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(hello)), { reliable: true, topic: 'avatarweave.hello.v1' }).catch(e => { this.helloTargets.delete(participant.sid); this.report(e); });
+  }
+  private reconnecting = () => { this.actionsV2?.dispose(); this.privateReady = false; };
+  private reconnected = () => {
+    this.resetPrivateActions();
+    for (const participant of this.room.remoteParticipants.values()) if (this.isAgent(participant)) this.agentState(participant);
+  };
   private transcriptKey(identity: string, id: string) { return JSON.stringify([identity, id]); }
   private emitStreamTranscript(message: Transcript, revision: number) {
     const state = this.transcriptSegments.get(this.transcriptKey(message.participantIdentity, message.id));
@@ -82,7 +119,8 @@ export class AvatarClient {
     this.options.onConnectionMilestone?.(stage, performance.now());
   }
   private agentState(p: RemoteParticipant) {
-    const state = p.attributes['lk.agent.state'];
+    this.sendHello(p);
+    const state = p.attributes?.['lk.agent.state'];
     if (state && ['listening', 'thinking', 'speaking'].includes(state)) this.markMilestone('agent_ready');
     this.options.onState?.(state ?? 'connected');
   }
@@ -129,7 +167,27 @@ export class AvatarClient {
     if (participant instanceof Object && !participant.isLocal && this.isAgent(participant as RemoteParticipant)) this.agentState(participant as RemoteParticipant);
   };
   private data = (payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
-    if (topic !== TOPICS.avatar || !participant || !this.isAgent(participant)) return;
+    if (!participant || !this.isAgent(participant)) return;
+    if (topic === 'avatarweave.bootstrap.v1') {
+      if (payload.byteLength > 4096) return;
+      try { const bootstrap = parseSessionBootstrap(JSON.parse(new TextDecoder().decode(payload)));
+        if (bootstrap && bootstrap.session_id === this.options.memorySessionId && bootstrap.nonce === this.helloNonce) {
+          this.actionsV2?.bootstrap(bootstrap.owner_epoch, bootstrap.generation_sequence, bootstrap.sequence_floor); this.privateReady = true;
+        }
+      } catch { /* A stale connection cannot bootstrap commands. */ }
+      return;
+    }
+    if (topic === 'avatarweave.command.v2') {
+      if (payload.byteLength > 4096 || !this.actionsV2) return;
+      try { const command = parseActionEnvelope(JSON.parse(new TextDecoder().decode(payload))); if (command && command.connection_nonce === this.helloNonce) this.actionsV2.accept(command); } catch { /* Malformed commands cannot execute. */ }
+      return;
+    }
+    if (topic === TOPICS.memoryStatus) {
+      if (payload.byteLength > 4096) return;
+      try { const status = parseMemoryStatus(JSON.parse(new TextDecoder().decode(payload))); if (status && status.session_id === this.options.memorySessionId) this.options.onMemoryStatus?.(status); } catch { /* Ignore malformed metadata. */ }
+      return;
+    }
+    if (topic !== TOPICS.avatar || this.options.memorySessionId) return;
     try {
       const command = parseAvatarCommand(JSON.parse(new TextDecoder().decode(payload)));
       if (!command || this.seenCommands.has(command.id)) return;
@@ -139,7 +197,7 @@ export class AvatarClient {
       this.options.onCommand?.(command);
     } catch (e) { this.report(e); }
   };
-  private disconnected = () => { this.transcriptSegments.clear(); this.clearAudio(); this.options.onState?.('disconnected'); };
+  private disconnected = () => { this.actionsV2?.dispose(); this.privateReady = false; this.transcriptSegments.clear(); this.clearAudio(); this.options.onState?.('disconnected'); };
   private clearAudio() {
     for (const timer of this.audioChecks.values()) clearTimeout(timer);
     this.audioChecks.clear();
@@ -149,6 +207,7 @@ export class AvatarClient {
   async connect(credentials: Credentials) {
     if (this.disposed) throw new Error('AvatarClient has been disposed');
     this.milestones.clear();
+    this.resetPrivateActions();
     this.options.onState?.('connecting');
     await this.room.connect(credentials.server_url, credentials.participant_token);
     this.markMilestone('room_connected');
@@ -159,20 +218,24 @@ export class AvatarClient {
   }
   async sendText(text: string) {
     if (!text.trim()) return;
+    if (this.options.memorySessionId && !this.privateReady) throw new Error('账号对话正在连接，请稍后再试。');
     const info = await this.room.localParticipant.sendText(text, { topic: TOPICS.chat });
     this.options.onTranscript?.({ id: info.id, role: 'user', text, final: true, participantIdentity: this.room.localParticipant.identity });
   }
-  async setMicrophone(enabled: boolean) { await this.room.localParticipant.setMicrophoneEnabled(enabled); }
+  async setMicrophone(enabled: boolean) { if (enabled && this.options.memorySessionId && !this.privateReady) throw new Error('账号对话正在连接，请稍后再试。'); await this.room.localParticipant.setMicrophoneEnabled(enabled); }
   async disconnect() { await this.room.disconnect(); this.clearAudio(); }
   async dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.actionsV2?.dispose();
     this.room.off(RoomEvent.ParticipantConnected, this.participantJoined);
     this.room.off(RoomEvent.TrackSubscribed, this.subscribed);
     this.room.off(RoomEvent.TrackUnsubscribed, this.unsubscribed);
     this.room.off(RoomEvent.ParticipantAttributesChanged, this.attributes);
     this.room.off(RoomEvent.DataReceived, this.data);
     this.room.off(RoomEvent.Disconnected, this.disconnected);
+    this.room.off(RoomEvent.Reconnecting, this.reconnecting);
+    this.room.off(RoomEvent.Reconnected, this.reconnected);
     if (this.options.manageTranscription !== false) this.room.unregisterTextStreamHandler(TOPICS.transcription);
     if (this.ownsRoom) await this.room.disconnect();
     this.transcriptSegments.clear();

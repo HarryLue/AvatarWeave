@@ -1,13 +1,16 @@
-"""Bounded admission and monotonic deadlines for foundation entry points."""
+"""Bounded lane admission, parent deadlines and physical-work accounting."""
 
 import asyncio
 from collections import Counter
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from time import monotonic
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from .contracts import ErrorInfo, ExecutionReport, ModuleResult, ScopedRequest, StageTiming
+
+_PARENT = ContextVar("memory_execution_parent", default=None)
 
 
 class MemoryFault(Exception):
@@ -33,28 +36,48 @@ class Executor:
         self.per_user = per_user
         self.running = 0
         self.users = Counter()
+        self.lanes = Counter()
+        self.user_lanes = Counter()
+        self.lane_limits = {"control": 2, "dialogue": 4, "deep_recall": 1, "maintenance": 1}
+        self.user_lane_limits = {"control": 1, "dialogue": 2, "deep_recall": 1, "maintenance": 1}
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.work_providers = []
 
     async def run(self, request: ScopedRequest, operation):
         start = monotonic()
         control = request.meta.execution
         user = (request.scope.workspace_id, request.scope.user_id)
+        lane = control.lane
+        user_lane = (*user, lane)
         admitted = False
+        parent = _PARENT.get()
+        nested = parent is not None and parent[:3] == (id(self), user, lane)
+        context_token = None
         reason = "none"
         try:
-            if self.running >= self.max_running or self.users[user] >= self.per_user:
+            if not nested and (
+                self.running >= self.max_running
+                or self.lanes[lane] >= self.lane_limits[lane]
+                or self.user_lanes[user_lane] >= self.user_lane_limits[lane]
+            ):
                 reason = "overload"
                 raise MemoryFault("overloaded", "Memory capacity is busy", retryable=True)
-            self.running += 1
-            self.users[user] += 1
-            admitted = True
+            if not nested:
+                self.running += 1
+                self.users[user] += 1
+                self.lanes[lane] += 1
+                self.user_lanes[user_lane] += 1
+                admitted = True
             # Audit deadline is checked as well as the monotonic budget. A stale
             # serialized request cannot start another full budget on replay.
             remaining = min(
                 control.budget_ms / 1000, (request.meta.deadline_at - self.clock()).total_seconds()
             )
+            if parent is not None and parent[0] == id(self) and parent[1] == user:
+                remaining = min(remaining, parent[3] - monotonic())
             if remaining <= 0:
                 raise TimeoutError
+            context_token = _PARENT.set((id(self), user, lane, monotonic() + remaining))
             async with asyncio.timeout(remaining):
                 result = await operation()
         except TimeoutError:
@@ -83,17 +106,28 @@ class Executor:
             # before admission is returned to the next caller.
             raise
         finally:
+            if context_token is not None:
+                _PARENT.reset(context_token)
             if admitted:
                 self.running -= 1
                 self.users[user] -= 1
+                self.lanes[lane] -= 1
+                self.user_lanes[user_lane] -= 1
                 if not self.users[user]:
                     del self.users[user]
+                if not self.user_lanes[user_lane]:
+                    del self.user_lanes[user_lane]
         elapsed_ms = (monotonic() - start) * 1000
         outcome = (
             "timed_out"
             if reason == "deadline"
             else {"ok": "completed", "partial": "partial", "error": "failed"}[result.status]
         )
+        handles = [
+            handle
+            for provider in self.work_providers
+            for handle in provider(request.meta.operation_id)
+        ]
         result.execution = ExecutionReport(
             operation_id=request.meta.operation_id,
             lane=control.lane,
@@ -102,12 +136,15 @@ class Executor:
             queue_wait_ms=0.0,
             timings=[
                 StageTiming(
-                    stage="foundation", elapsed_ms=elapsed_ms, queue_wait_ms=0.0, outcome=outcome
+                    stage=type(request).__name__,
+                    elapsed_ms=elapsed_ms,
+                    queue_wait_ms=0.0,
+                    outcome=outcome,
                 )
             ],
             cancel_reason=reason,
-            cleanup="released",
-            remaining_work_handles=[],
+            cleanup="detached_bounded" if handles else "released",
+            remaining_work_handles=handles[:16],
             degraded_routes=[],
         )
         return result

@@ -6,6 +6,7 @@ import { AvatarView, type AvatarRenderer } from '@avatarweave/react';
 import './style.css';
 import { VoicePicker, type Voice } from './VoicePicker';
 import { ConnectionPreparation } from './connection-preparation';
+import { MemoryPanel, endPrivateSession, type PrivateCredentials } from './MemoryPanel';
 
 type DisplayMessage = Transcript & { receivedAt: number };
 const messageTimeFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -13,6 +14,7 @@ const messageTimeFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', mi
 function App() {
   const avatar = useRef<AvatarRenderer | null>(null);
   const client = useRef<AvatarClient | null>(null);
+  const privateSession = useRef<string | null>(null);
   const [ready, setReady] = useState(false);
   const [state, setState] = useState('disconnected');
   const [connected, setConnected] = useState(false);
@@ -21,6 +23,7 @@ function App() {
   const [text, setText] = useState('');
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [error, setError] = useState('');
+  const [memoryNotice, setMemoryNotice] = useState('');
   const [mode, setMode] = useState('');
   const [accessKey, setAccessKey] = useState('');
   const [voices, setVoices] = useState<Voice[]>([]);
@@ -117,9 +120,35 @@ function App() {
     } catch (e) { logStage('连接失败'); onError(e as Error); await client.current?.dispose(); client.current = null; setState('disconnected'); setConnected(false); }
     finally { setBusy(false); }
   }
+  async function connectPrivate(credentials: PrivateCredentials) {
+    setBusy(true); setError('');
+    try {
+      preparation.invalidate();
+      await client.current?.dispose();
+      const next = new AvatarClient({ memorySessionId: credentials.session_id, renderer: {
+        setAudio: stream => avatar.current?.setAudio(stream),
+        execute: command => avatar.current?.execute(command),
+        executeTracked: async (command, signal, observe) => { if (avatar.current) await avatar.current.executeTracked(command, signal, observe); else observe('failed'); },
+      }, onTranscript: receive, onError, onMemoryStatus: notice => setMemoryNotice(
+        notice.state === 'source_saved' ? '本轮原话已保存，长期记忆正在整理。' : notice.state === 'temporary' ? '本次对话不保存记忆。' : '记忆状态已变化或处理未完成，旧回复已停止。'), onState: value => {
+        setState(value); if (value === 'disconnected') { setConnected(false); setMic(false); }
+      } });
+      client.current = next;
+      privateSession.current = credentials.session_id;
+      setMessages([]);
+      await next.connect(credentials);
+      setConnected(true);
+    } catch (error) {
+      onError(error as Error); await client.current?.dispose(); client.current = null;
+      await endPrivateSession(credentials.session_id).catch(() => {});
+      privateSession.current = null;
+    } finally { setBusy(false); }
+  }
   async function disconnect() {
     setBusy(true);
-    try { await client.current?.dispose(); client.current = null; }
+    try { await client.current?.dispose(); client.current = null;
+      if (privateSession.current) { await endPrivateSession(privateSession.current); privateSession.current = null; }
+    }
     catch (e) { onError(e as Error); }
     finally { setState('disconnected'); setConnected(false); setMic(false); setBusy(false); }
   }
@@ -141,6 +170,8 @@ function App() {
     <div className="workspace"><section className="stage"><div className="stage-label"><span className="dot" />AVATARWEAVE</div><div className="orb" /><div className="avatar">{profile && <AvatarView coreUrl={profile.assets.core_url} modelUrl={profile.assets.model_url} motionSyncUrl={profile.assets.motion_sync_url} draggable={profile.draggable} onReady={onReady} onError={onError} />}</div><div className="stage-footer"><div><strong>{profile?.name ?? '加载数字人…'}</strong><span>{ready ? '数字人已就绪 · 拖动可调整位置' : '正在加载数字人…'}</span></div><button className="icon-button" disabled={!ready} onClick={() => avatar.current?.resize()} title="重置位置">↺</button><button className="icon-button" disabled={!ready || !profile?.default_action} onClick={() => { void avatar.current?.execute(profile!.actions[profile!.default_action!]).catch(onError); }} title={profile?.default_action ? profile.actions[profile.default_action].label : '未配置默认动作'}>✦</button></div></section>
     <section className="chat"><div className="chat-heading"><div><h2>对话空间</h2><span>每一次交流，都是新的开始</span></div><span className="chat-symbol">⌁</span></div>{voiceEnabled && <VoicePicker providerLabel={voiceInfo.provider_label} notice={voiceInfo.notice} canPreview={voiceInfo.capabilities.preview} voices={voices} selected={voice} disabled={connected || busy} accessKey={accessKey} onChange={selectVoice} onError={onError} />}<div className="messages" aria-live="polite">{!messages.length && <div className="empty"><div className="empty-icon">✳</div><h3>你好，很高兴见到你</h3><p>连接助手后，试着打个招呼<br />或者邀请数字人做个动作。</p><div className="suggestions">{['你好，介绍一下自己', '请做一个动作'].map(s => <button key={s} onClick={() => setText(s)}>{s} ↗</button>)}</div></div>}{messages.map(m => <div key={m.id} className={`message ${m.role}`}><span className="message-label">{m.role === 'user' ? '你' : profile?.name ?? '助手'}<time className="message-time" dateTime={new Date(m.receivedAt).toISOString()} title={new Date(m.receivedAt).toLocaleString('zh-CN')}>{messageTimeFormat.format(m.receivedAt)}</time></span><div>{m.text}{!m.final && <span className="cursor">▍</span>}</div></div>)}<div ref={bottom} /></div>
     <form className="composer" onSubmit={send}><input aria-label="消息" value={text} onChange={e => setText(e.target.value)} placeholder={connected ? '输入消息，按回车发送…' : '连接后开始对话…'} maxLength={4000} /><button aria-label="发送" disabled={!connected || !text.trim()}>↑</button></form><div className="chat-note">{mode === 'mock' ? '演示模式提供真实房间连接和文字回复，语音需配置模型。' : '语音输入需要浏览器麦克风授权。'}</div></section></div>
+    {memoryNotice && <p role="status">{memoryNotice}</p>}
+    <MemoryPanel disabled={connected || busy || !ready} onConnect={connectPrivate} />
     {error && <div role="alert" className="error">{error}<button onClick={() => setError('')} aria-label="关闭错误">×</button></div>}
     <footer><div className="connection-settings">{avatars.length > 1 && <label>数字人 <select aria-label="数字人" value={avatarId} disabled={connected || busy} onChange={e => setAvatarId(e.target.value)}>{avatars.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>}<label>访问密钥 <input type="password" value={accessKey} onChange={e => setAccessKey(e.target.value)} placeholder="本地默认无需填写" autoComplete="off" /></label></div><div className="controls"><button className={`mic-button ${mic ? 'active' : ''}`} onClick={toggleMic} disabled={!connected || mode === 'mock'}>{mic ? '关闭麦克风' : '开启麦克风'}</button><button className="connect-button" disabled={busy || !ready} onClick={connected ? disconnect : connect}>{busy ? '请稍候…' : connected ? '结束对话' : '开始对话'} <span>↗</span></button></div></footer><div className="bottomline">AVATARWEAVE · REALTIME INTERACTION <span>面向自由集成而构建</span></div>
   </main>;

@@ -17,6 +17,8 @@ from .memory.config import MemorySettings
 from .memory.execution import MemoryFault
 from .memory.http import MemoryRuntime, fault_handler
 from .memory.http import router as memory_router
+from .memory.management_http import router as memory_management_router
+from .memory.portability_http import router as memory_portability_router
 from .pipeline import load_pipeline
 from .session_options import merge_options
 from .voices import open_preview, voice_service
@@ -34,12 +36,14 @@ async def lifespan(app):
         yield
     finally:
         if app.state.memory_runtime:
-            await app.state.memory_runtime.database.close()
+            await app.state.memory_runtime.close()
         await engine.dispose()
 
 
 app = FastAPI(title="AvatarWeave", version="0.1.0", lifespan=lifespan)
 app.include_router(memory_router)
+app.include_router(memory_management_router)
+app.include_router(memory_portability_router)
 app.add_exception_handler(MemoryFault, fault_handler)
 if memory_settings.enabled:
     from starlette.middleware.sessions import SessionMiddleware

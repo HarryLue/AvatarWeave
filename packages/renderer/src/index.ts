@@ -44,6 +44,9 @@ export class AvatarRenderer {
   private audio: MediaStream | null = null;
   private audioTask = Promise.resolve();
   private initTask?: Promise<this>;
+  private trackedController?: AbortController;
+  private pendingTracked = 0;
+  private trackedTail: Promise<void> = Promise.resolve();
   constructor(readonly options: RendererOptions) {}
   init(): Promise<this> {
     return this.initTask ??= this.initialize();
@@ -122,11 +125,73 @@ export class AvatarRenderer {
   }
   async execute(command: { type: 'expression' | 'motion'; name: string; index?: number }) {
     if (!this.model || this.disposed) return;
+    this.trackedController?.abort();
     if (command.type === 'expression') await this.model.expression(command.name);
     else await this.model.motion(command.name, command.index);
   }
+  async executeTracked(command: { type: 'expression' | 'motion'; name: string; index?: number }, external: AbortSignal,
+    observe: (state: 'accepted' | 'started' | 'completed' | 'cancelled' | 'failed' | 'unknown') => void): Promise<void> {
+    if (this.pendingTracked >= 2 || this.disposed) { observe('failed'); return; }
+    this.trackedController?.abort();
+    const previous = this.trackedTail;
+    let release!: () => void;
+    this.trackedTail = new Promise<void>(resolve => { release = resolve; });
+    this.pendingTracked++;
+    try {
+      await previous;
+      if (external.aborted || this.disposed) { observe('cancelled'); return; }
+      await this.performTracked(command, external, observe);
+    } finally { this.pendingTracked--; release(); }
+  }
+  private async performTracked(command: { type: 'expression' | 'motion'; name: string; index?: number }, external: AbortSignal,
+    observe: (state: 'accepted' | 'started' | 'completed' | 'cancelled' | 'failed' | 'unknown') => void): Promise<void> {
+    const model = this.model;
+    if (!model || this.disposed || command.type !== 'motion' || command.index === undefined) { observe('failed'); return; }
+    const manager = model.internalModel.motionManager;
+    const definition = manager.definitions[command.name]?.[command.index] as { Sound?: string; sound?: string } | undefined;
+    if (!definition || definition.Sound || definition.sound) { observe('failed'); return; }
+    this.trackedController?.abort();
+    const own = this.trackedController = new AbortController();
+    const forward = () => own.abort();
+    external.addEventListener('abort', forward, {once:true});
+    if (external.aborted) own.abort();
+    let restoreLoop: (() => void) | undefined;
+    let starting: Promise<boolean> | undefined;
+    try {
+      const motion = await manager.loadMotion(command.name, command.index);
+      if (own.signal.aborted || this.disposed) { observe('cancelled'); return; }
+      if (!motion) { observe('failed'); return; }
+      const finite = motion as unknown as { isLoop(): boolean; setIsLoop(loop: boolean): void; getLoopDuration(): number };
+      if (typeof finite.isLoop !== 'function' || typeof finite.setIsLoop !== 'function' || typeof finite.getLoopDuration !== 'function' ||
+          !Number.isFinite(finite.getLoopDuration()) || finite.getLoopDuration() <= 0 || finite.getLoopDuration() > 30) { observe('failed'); return; }
+      const originalLoop = finite.isLoop(); finite.setIsLoop(false);
+      restoreLoop = () => finite.setIsLoop(originalLoop);
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (state: 'completed' | 'cancelled' | 'failed') => {
+          if (settled) return;
+          settled = true; manager.off('motionFinish', done); own.signal.removeEventListener('abort', cancel);
+          observe(state); resolve();
+        };
+        const done = () => finish(own.signal.aborted ? 'cancelled' : 'completed');
+        const cancel = () => { if (!manager.destroyed) manager.stopAllMotions(); finish('cancelled'); };
+        own.signal.addEventListener('abort', cancel, {once:true});
+        starting = model.motion(command.name, command.index);
+        void starting.then(started => {
+          if (own.signal.aborted) { if (!manager.destroyed) manager.stopAllMotions(); finish('cancelled'); return; }
+          if (!started) { finish('failed'); return; }
+          manager.once('motionFinish', done); observe('started');
+        }).catch(error => { own.signal.removeEventListener('abort', cancel); reject(error); });
+      });
+    } finally {
+      if (starting) await starting.catch(() => {});
+      restoreLoop?.(); external.removeEventListener('abort', forward);
+      if (this.trackedController === own) this.trackedController = undefined;
+    }
+  }
   dispose() {
     if (this.disposed) return;
+    this.trackedController?.abort();
     this.disposed = true;
     this.observer?.disconnect();
     const sync = this.sync;

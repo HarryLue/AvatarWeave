@@ -46,7 +46,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 150));
     container.remove();
     if (frames === 0) throw new Error('MotionSync did not consume audio worklet frames');
-  }, `/@fs${process.cwd()}/packages/avatar-assets/dist/index.js`);
+  }, `/@fs${process.cwd()}/packages/renderer/dist/index.js`);
   if (errors.length) throw new Error(errors.join('\n'));
   console.log('PASS: Live2D render, LiveKit connect, streamed reply, action, disconnect, reconnect, synthetic audio MotionSync frames and teardown; no page errors');
 } catch(e) {

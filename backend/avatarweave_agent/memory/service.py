@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from sqlalchemy import func, select, update
 
+from .archive import ArchiveMixin
+from .context import ContextMixin
 from .contracts import (
     InputEventInput,
     InputEventOutput,
@@ -26,7 +28,22 @@ from .contracts import (
     VisibilityReadInput,
     VisibilityReadOutput,
 )
+from .controls import ControlMixin
+from .embedding import EmbeddingMixin
+from .entities import EntityMixin
 from .execution import Executor, MemoryFault
+from .facts import FactMixin
+from .jobs import JobMixin
+from .maintenance import MaintenanceMixin
+from .management import ManagementMixin
+from .operations import MigrationMixin
+from .organizer import OrganizerMixin
+from .output import OutputMixin
+from .portability import PortabilityMixin
+from .privacy import PrivacyMixin
+from .recall import RecallMixin
+from .reflections import ReflectionMixin
+from .scheduler import SchedulerMixin
 from .storage import (
     Account,
     EventHead,
@@ -50,7 +67,25 @@ def default_preferences():
     )
 
 
-class MemoryService:
+class MemoryService(
+    FactMixin,
+    PrivacyMixin,
+    ControlMixin,
+    JobMixin,
+    ManagementMixin,
+    EmbeddingMixin,
+    RecallMixin,
+    ContextMixin,
+    OutputMixin,
+    OrganizerMixin,
+    MaintenanceMixin,
+    ArchiveMixin,
+    EntityMixin,
+    PortabilityMixin,
+    MigrationMixin,
+    SchedulerMixin,
+    ReflectionMixin,
+):
     def __init__(
         self,
         database: MemoryDatabase,
@@ -102,6 +137,10 @@ class MemoryService:
             )
 
     async def _account(self, db, scope: Scope, *, lock=False):
+        from .tables import AccountBarrier
+
+        if await db.get(AccountBarrier, scope.user_id):
+            raise MemoryFault("privacy_changed", "Account data is being deleted")
         if scope.workspace_id != self.workspace_id or scope.companion_id not in self.companions:
             raise MemoryFault("not_found", "Account or companion not found")
         query = select(Account).where(
@@ -116,8 +155,14 @@ class MemoryService:
                 .values(source_watermark=Account.source_watermark)
             )
         row = await db.scalar(query.execution_options(populate_existing=True))
+        if lock and await db.get(AccountBarrier, scope.user_id, populate_existing=True):
+            raise MemoryFault("privacy_changed", "Account data is being deleted")
         if row is None:
             raise MemoryFault("not_found", "Account not found")
+        if lock:
+            from .job_context import verify_job_lease
+
+            await verify_job_lease(db, row.id, self.clock())
         return row
 
     @staticmethod
@@ -139,6 +184,8 @@ class MemoryService:
 
     async def session(self, request: SessionInput) -> ModuleResult[SessionOutput]:
         async def operation():
+            if request.idempotency_key.startswith("__"):
+                raise MemoryFault("invalid_transition", "Reserved session operation key")
             async with self.database.sessions.begin() as db:
                 account = await self._account(db, request.scope, lock=True)
                 self._privacy(account, request)
@@ -164,6 +211,23 @@ class MemoryService:
                                 )
                             # An active Worker is not displaced by a browser reconnect.
                             row.capabilities_json = request.capabilities.model_dump_json()
+                            from .tables import Generation, OutputLedger
+
+                            await db.execute(
+                                update(Generation)
+                                .where(Generation.session_id == row.id)
+                                .values(cancelled=True)
+                            )
+                            await db.execute(
+                                update(OutputLedger)
+                                .where(
+                                    OutputLedger.session_id == row.id,
+                                    OutputLedger.state.not_in(
+                                        ["completed", "cancelled", "failed", "unknown"]
+                                    ),
+                                )
+                                .values(state="cancelled")
+                            )
                         else:
                             raise MemoryFault(
                                 "unsupported_capability", "Use trusted owner lease adapter"
@@ -282,6 +346,42 @@ class MemoryService:
                 raise MemoryFault("stale_generation", "Owner lease is no longer valid")
             row.lease_until = self.clock() + timedelta(seconds=30)
 
+    async def release_owner(self, scope, session_id, worker_id, owner_epoch):
+        async with self.database.sessions.begin() as db:
+            await self._account(db, scope, lock=True)
+            row = await self._session(db, scope, session_id)
+            if row.owner_id == worker_id and row.owner_epoch == owner_epoch:
+                row.owner_id, row.lease_until = None, None
+                if row.status != "ended":
+                    row.status = "reconnecting"
+
+    async def expire_sessions(self, batch_size=128):
+        from sqlalchemy import or_
+
+        cutoff = self.clock() - timedelta(days=1)
+        async with self.database.sessions.begin() as db:
+            rows = list(
+                await db.scalars(
+                    select(MemorySession)
+                    .join(Account, Account.id == MemorySession.account_id)
+                    .where(
+                        Account.workspace_id == self.workspace_id,
+                        MemorySession.status != "ended",
+                        or_(
+                            (MemorySession.lease_until.is_(None))
+                            & (MemorySession.created_at <= cutoff),
+                            MemorySession.lease_until <= cutoff,
+                        ),
+                    )
+                    .limit(batch_size)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            for row in rows:
+                row.status, row.owner_id, row.lease_until = "ended", None, None
+                row.owner_epoch += 1
+            return len(rows)
+
     async def input_event(self, request: InputEventInput) -> ModuleResult[InputEventOutput]:
         async def operation():
             async with self.database.sessions.begin() as db:
@@ -382,21 +482,7 @@ class MemoryService:
                     .where(QueueGuard.id == 1)
                     .values(revision=QueueGuard.revision + 1)
                 )
-                pending = Outbox.state.in_(["queued", "running", "retry_wait"])
-                count, size, oldest = (
-                    await db.execute(
-                        select(
-                            func.count(),
-                            func.coalesce(func.sum(Outbox.payload_bytes), 0),
-                            func.min(Outbox.created_at),
-                        ).where(pending)
-                    )
-                ).one()
-                user_count = await db.scalar(
-                    select(func.count())
-                    .select_from(Outbox)
-                    .where(pending, Outbox.account_id == account.id)
-                )
+                count, size, oldest, user_count = await self.queue_usage(db, account.id)
                 payload_bytes = len(event.model_dump_json().encode())
                 if (
                     count >= self.max_outbox
@@ -409,6 +495,7 @@ class MemoryService:
                     )
                 if head:
                     old = await db.get(SourceRevision, (event.event_id, current))
+                    await self.invalidate_source(db, account, event.event_id, current)
                     old.revoked = True
                     old.structured_settled = old.index_settled = True
                     old.state = "rejected"
@@ -449,6 +536,7 @@ class MemoryService:
                 )
                 job_id = uuid4().hex
                 db.add(source)
+                await self.control_barrier(db, account, request.scope, event)
                 db.add(
                     Outbox(
                         id=job_id,
@@ -540,7 +628,12 @@ class MemoryService:
                     for r in rows
                     if r.source_json is not None and utc(r.expires_at) > self.clock()
                 ]
-                structured = [r.event_id for r in rows if r.state in {"structured", "indexed"}]
+                structured = [
+                    r.event_id
+                    for r in rows
+                    if r.state in {"structured", "indexed"}
+                    or (r.state == "failed" and r.structured_settled)
+                ]
                 indexed = [r.event_id for r in rows if r.state == "indexed"]
                 overlay = [
                     r.event_id
@@ -569,15 +662,19 @@ class MemoryService:
         return await self.executor.run(request, operation)
 
     async def repository(self, request: RepositoryInput) -> ModuleResult[RepositoryOutput]:
+        if request.operation != "read_sources":
+            return await self.fact_repository(request)
+
         async def operation():
-            if request.operation != "read_sources":
-                raise MemoryFault("unsupported_capability", "Fact repository requires P2")
             if request.cursor is not None or len(request.refs) > request.page_size:
                 raise MemoryFault("budget_exceeded", "Batch exact source reads to page_size")
             async with self.database.sessions() as db:
                 account = await self._account(db, request.scope)
                 self._privacy(account, request)
-                sources, descriptors = [], []
+                sources, descriptors, capsules = [], [], []
+                from .contracts import EvidenceCapsule
+                from .tables import Capsule
+
                 for ref in request.refs:
                     row = await db.scalar(
                         select(SourceRevision)
@@ -603,6 +700,26 @@ class MemoryService:
                         origin = source.origin
                     else:
                         origin = row.origin
+                    retained = list(
+                        await db.scalars(
+                            select(Capsule)
+                            .where(
+                                Capsule.account_id == account.id,
+                                Capsule.companion_id == request.scope.companion_id,
+                                Capsule.event_id == row.event_id,
+                                Capsule.source_revision == row.revision,
+                            )
+                            .limit(1001)
+                        )
+                    )
+                    if len(retained) + len(capsules) > 1000:
+                        raise MemoryFault("budget_exceeded", "Capsule batch requires another page")
+                    capsules.extend(
+                        EvidenceCapsule.model_validate_json(c.capsule_json).model_copy(
+                            update={"original_source_available": available}
+                        )
+                        for c in retained
+                    )
                     descriptors.append(
                         SourceDescriptor(
                             event_id=row.event_id,
@@ -612,7 +729,7 @@ class MemoryService:
                             origin=origin,
                             occurred_at=utc(row.occurred_at),
                             raw_available=available,
-                            capsule_ids=[],
+                            capsule_ids=[c.id for c in retained],
                             revoked=False,
                         )
                     )
@@ -622,7 +739,7 @@ class MemoryService:
                     data=RepositoryOutput(
                         records=[],
                         sources=sources,
-                        capsules=[],
+                        capsules=capsules,
                         source_metadata=descriptors,
                         next_cursor=None,
                         read_watermark=account.memory_revision,
@@ -640,7 +757,9 @@ class MemoryService:
             rows = list(
                 await db.scalars(
                     select(SourceRevision)
+                    .join(Account, Account.id == SourceRevision.account_id)
                     .where(
+                        Account.workspace_id == self.workspace_id,
                         SourceRevision.expires_at <= self.clock(),
                         SourceRevision.source_json.is_not(None),
                     )
@@ -651,4 +770,22 @@ class MemoryService:
             )
             for row in rows:
                 row.source_json = None
+                from .tables import DerivedView
+
+                jobs = list(
+                    await db.scalars(
+                        select(Outbox.id).where(
+                            Outbox.event_id == row.event_id, Outbox.source_revision == row.revision
+                        )
+                    )
+                )
+                if jobs:
+                    await db.execute(
+                        update(DerivedView)
+                        .where(
+                            DerivedView.account_id == row.account_id,
+                            DerivedView.id.in_([key + ":extracted" for key in jobs]),
+                        )
+                        .values(state="invalidated", document_json=None)
+                    )
             return len(rows)

@@ -19,7 +19,7 @@ jobs:
         database: [sqlite, postgres]
     services:
       postgres:
-        image: postgres:17-alpine
+        image: pgvector/pgvector:pg18-trixie
         env:
           POSTGRES_USER: avatar
           POSTGRES_PASSWORD: avatar
@@ -74,6 +74,7 @@ jobs:
           backend/.venv/bin/python scripts/smoke.py
           node scripts/browser-smoke.mjs
           node scripts/browser-config-smoke.mjs
+          MEMORY_UI_BASE_URL=http://127.0.0.1:5174 node scripts/browser-memory-smoke.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -81,6 +82,7 @@ jobs:
           path: |
             logs/
             docs/demo*.png
+            .runtime/memory-ui-smoke.png
   bootstrap:
     runs-on: ubuntu-latest
     container: debian:12-slim
@@ -94,3 +96,5 @@ jobs:
           .tools/bin/uv --version
           .tools/livekit-server --version
           backend/.venv/bin/python scripts/check-config.py
+      - name: Verify HTTP and HTTPS proxy origin headers
+        run: backend/.venv/bin/python -m pytest backend/tests/test_nginx_proxy_origin.py -q

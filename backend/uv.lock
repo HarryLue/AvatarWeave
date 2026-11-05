@@ -271,12 +271,14 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "asyncpg" },
     { name = "authlib" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "itsdangerous" },
     { name = "kokoro-onnx" },
     { name = "livekit-agents", extra = ["openai", "silero"] },
     { name = "livekit-api" },
     { name = "misaki", extra = ["zh"] },
+    { name = "pgvector" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -319,6 +321,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21,<1" },
     { name = "asyncpg", specifier = ">=0.31,<1" },
     { name = "authlib", specifier = ">=1.6,<2" },
+    { name = "cryptography", specifier = ">=46,<51" },
     { name = "fastapi", specifier = ">=0.124,<1" },
     { name = "itsdangerous", specifier = ">=2.2,<3" },
     { name = "kokoro-onnx", specifier = "==0.6.1" },
@@ -329,6 +332,7 @@ requires-dist = [
     { name = "livekit-plugins-elevenlabs", marker = "extra == 'elevenlabs'", specifier = "~=1.8" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", specifier = "~=1.8" },
     { name = "misaki", extras = ["zh"], specifier = ">=0.9.4,<0.10" },
+    { name = "pgvector", specifier = ">=0.4,<0.5" },
     { name = "pydantic-settings", specifier = ">=2.12,<3" },
     { name = "python-dotenv", specifier = ">=1.1,<2" },
     { name = "pyyaml", specifier = ">=6,<7" },
@@ -1842,6 +1846,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7d/fa/3944b40b07da9ce895c0e6303a5ab7d53da063554f534556b134a54d6093/packaging-26.3.tar.gz", hash = "sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79", size = 313412, upload-time = "2026-08-04T18:15:28.737Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl", hash = "sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c", size = 129956, upload-time = "2026-08-04T18:15:27.159Z" },
+]
+
+[[package]]
+name = "pgvector"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/6c/6d8b4b03b958c02fa8687ec6063c49d952a189f8c91ebbe51e877dfab8f7/pgvector-0.4.2.tar.gz", hash = "sha256:322cac0c1dc5d41c9ecf782bd9991b7966685dee3a00bc873631391ed949513a", size = 31354, upload-time = "2025-12-05T01:07:17.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/26/6cee8a1ce8c43625ec561aff19df07f9776b7525d9002c86bceb3e0ac970/pgvector-0.4.2-py3-none-any.whl", hash = "sha256:549d45f7a18593783d5eec609ea1684a724ba8405c4cb182a0b2b08aeff04e08", size = 27441, upload-time = "2025-12-05T01:07:16.536Z" },
 ]
 
 [[package]]
