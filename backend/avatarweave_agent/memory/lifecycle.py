@@ -325,7 +325,7 @@ def resolve_time(expression, anchor, timezone):
         day = re.search(r"(?<!\d)(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?", expression)
         month = re.fullmatch(r"(\d{4})年(\d{1,2})月", expression)
         year = re.fullmatch(r"(\d{4})年", expression)
-        years_ago = re.fullmatch(r"(\d{1,3}|[一二两三四五六七八九十])年前", expression)
+        years_ago = re.fullmatch(r"(\d{1,3}|[一二两三四五六七八九十]{1,3})年前", expression)
         year_range = re.fullmatch(r"(\d{4})年(?:到|至|—|-)(\d{4})年", expression)
         if year_range:
             a, b = map(int, year_range.groups())
@@ -334,9 +334,9 @@ def resolve_time(expression, anchor, timezone):
             start, end = datetime(a, 1, 1, tzinfo=zone), datetime(b + 1, 1, 1, tzinfo=zone)
             precision, confidence = "range", "explicit"
         elif years_ago:
-            digits = {c: i for i, c in enumerate("零一二三四五六七八九十")}
-            digits["两"] = 2
-            n = int(years_ago[1]) if years_ago[1].isdigit() else digits[years_ago[1]]
+            from .time_expressions import number
+
+            n = number(years_ago[1])
             y = local.year - n
             start, end = datetime(y, 1, 1, tzinfo=zone), datetime(y + 1, 1, 1, tzinfo=zone)
             precision, confidence = "year", "derived"
@@ -348,8 +348,26 @@ def resolve_time(expression, anchor, timezone):
             start = datetime(y, m, 1, tzinfo=zone)
             end = datetime(y + (m == 12), 1 if m == 12 else m + 1, 1, tzinfo=zone)
             precision, confidence = "month", "explicit"
-        elif year or expression == "去年":
-            y = int(year[1]) if year else local.year - 1
+        elif match := re.fullmatch(r"(去年|前年|今年)(?:(\d{1,2})月)?", expression):
+            y = local.year - {"去年": 1, "前年": 2, "今年": 0}[match[1]]
+            if match[2]:
+                m = int(match[2])
+                start = datetime(y, m, 1, tzinfo=zone)
+                end = datetime(y + (m == 12), 1 if m == 12 else m + 1, 1, tzinfo=zone)
+                precision, confidence = "month", "derived"
+            else:
+                start, end = datetime(y, 1, 1, tzinfo=zone), datetime(y + 1, 1, 1, tzinfo=zone)
+                precision, confidence = "year", "derived"
+        elif expression in {"上个月", "这个月", "本月", "下个月"}:
+            month_index = (
+                local.year * 12 + local.month - 1 + {"上个月": -1, "下个月": 1}.get(expression, 0)
+            )
+            y, m = month_index // 12, month_index % 12 + 1
+            start = datetime(y, m, 1, tzinfo=zone)
+            end = datetime(y + (m == 12), 1 if m == 12 else m + 1, 1, tzinfo=zone)
+            precision, confidence = "month", "derived"
+        elif year:
+            y = int(year[1])
             start, end = datetime(y, 1, 1, tzinfo=zone), datetime(y + 1, 1, 1, tzinfo=zone)
             precision, confidence = "year", "explicit" if year else "derived"
         elif expression in {"今天", "昨天", "前天", "明天", "后天"}:
@@ -362,19 +380,19 @@ def resolve_time(expression, anchor, timezone):
             )
         elif expression == "现在":
             start, precision, confidence = anchor, "instant", "derived"
-        elif match := re.fullmatch(r"(下周|本周)([一二三四五六日天])", expression):
+        elif match := re.fullmatch(r"(上周|下周|本周)([一二三四五六日天])", expression):
             weekday = "一二三四五六日".index(match[2].replace("天", "日"))
             date = local.date() + timedelta(
-                days=weekday - local.weekday() + (7 if match[1] == "下周" else 0)
+                days=weekday - local.weekday() + {"下周": 7, "上周": -7}.get(match[1], 0)
             )
             start, precision, confidence = (
                 datetime.combine(date, datetime.min.time(), zone),
                 "day",
                 "derived",
             )
-        elif expression in {"下周", "本周"}:
+        elif expression in {"上周", "下周", "本周"}:
             date = local.date() + timedelta(
-                days=-local.weekday() + (7 if expression == "下周" else 0)
+                days=-local.weekday() + {"下周": 7, "上周": -7}.get(expression, 0)
             )
             start = datetime.combine(date, datetime.min.time(), zone)
             end, precision, confidence = start + timedelta(days=7), "range", "derived"
@@ -426,10 +444,22 @@ def temporal(request: TemporalInput):
         )
         if not grounded:
             confidence, clarification = "ambiguous", "请确认原话中未出现的时间。"
+        # A direct self-introduction is a current state at the reporting time.
+        # This gives explicit name updates temporal order instead of permanent conflicts.
+        if (
+            not expression
+            and candidate.statement.predicate == "name"
+            and candidate.statement.subject_id == request.scope.user_id
+            and candidate.statement.polarity == "positive"
+        ):
+            window = TimeWindow(start=request.anchor_event.occurred_at, precision="instant")
         event_window = window
         if (
             window.start
-            and rule_for(candidate).cardinality == "single"
+            and (
+                rule_for(candidate).cardinality == "single"
+                or (rule_for(candidate).cardinality == "set" and expression == "现在")
+            )
             and re.search(r"搬|从|开始|起|现在", request.anchor_event.content)
         ):
             window = window.model_copy(update={"end": None})

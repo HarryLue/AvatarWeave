@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from .contracts import TimeWindow
 
-DAY = r"(?:今天|明天|后天|昨天|前天|(?:本周|下周)[一二三四五六日天]|\d{4}[年/-]\d{1,2}[月/-]\d{1,2}日?)"
+DAY = r"(?:今天|明天|后天|昨天|前天|(?:上周|本周|下周)[一二三四五六日天]|\d{4}[年/-]\d{1,2}[月/-]\d{1,2}日?)"
 PART = r"(?:凌晨|早上|上午|中午|下午|傍晚|晚上)"
 NUMBER = r"(?:\d{1,2}|[零〇一二两三四五六七八九十]{1,3})"
 CLOCK = re.compile(
@@ -35,10 +35,10 @@ def date_for(expression, local):
     shifts = {"今天": 0, "明天": 1, "后天": 2, "昨天": -1, "前天": -2}
     if expression in shifts:
         return local.date() + timedelta(days=shifts[expression])
-    if match := re.fullmatch(r"(本周|下周)([一二三四五六日天])", expression):
+    if match := re.fullmatch(r"(上周|本周|下周)([一二三四五六日天])", expression):
         weekday = "一二三四五六日".index(match[2].replace("天", "日"))
         return local.date() + timedelta(
-            days=weekday - local.weekday() + (7 if match[1] == "下周" else 0)
+            days=weekday - local.weekday() + {"下周": 7, "上周": -7}.get(match[1], 0)
         )
     match = re.fullmatch(r"(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?", expression)
     if match:

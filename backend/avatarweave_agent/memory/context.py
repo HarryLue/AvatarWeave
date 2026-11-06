@@ -1,5 +1,6 @@
 """M13/M14/M15 budgeted context, stable persona and evidence-bounded follow-up."""
 
+import json
 from datetime import timedelta
 from uuid import uuid4
 
@@ -20,7 +21,8 @@ def token_bound(text):
     return len(text.encode("utf-8"))
 
 
-def build_context(request, *, loops=()):
+def build_context(request, *, loops=(), entity_names=None):
+    entity_names = entity_names or {}
     budget = request.budget
     current_cost = token_bound(request.latest_event.content)
     system = (
@@ -68,7 +70,16 @@ def build_context(request, *, loops=()):
             f"predicate={record.statement.predicate}; "
             f"valid={window.start.isoformat() if window.start else 'unknown'}/"
             f"{window.end.isoformat() if window.end else 'open'}; evidence={hit.evidence_level}; use={hit.permitted_use}]\n"
-            + record.display_text
+            + json.dumps(
+                {
+                    "display": record.display_text,
+                    "person": entity_names.get(record.statement.subject_id),
+                    "value": record.statement.canonical_value,
+                    "qualifiers": [q.model_dump() for q in record.statement.qualifiers],
+                    "original_time": window.original_expression,
+                },
+                ensure_ascii=False,
+            )
         )
         cost = token_bound(text)
         allowed = (
@@ -228,6 +239,28 @@ class ContextMixin:
                     )
                     if row is None:
                         raise MemoryFault("version_conflict", "Context memory was invalidated")
+                from .contracts import EntityCandidate
+                from .tables import Entity
+
+                people = (
+                    list(
+                        await db.scalars(
+                            select(Entity).where(
+                                Entity.account_id == account.id,
+                                Entity.companion_id == request.scope.companion_id,
+                                Entity.id.in_(
+                                    [h.record.statement.subject_id for h in request.retrieved]
+                                ),
+                            )
+                        )
+                    )
+                    if request.retrieved
+                    else []
+                )
+                entity_names = {
+                    row.id: EntityCandidate.model_validate_json(row.entity_json).canonical_name
+                    for row in people
+                }
                 loops = []
                 if request.active_loop_refs:
                     from .contracts import PrivacyPreference
@@ -246,7 +279,7 @@ class ContextMixin:
                         loops.append(loop)
                 return ModuleResult(
                     status="ok",
-                    data=build_context(request, loops=loops),
+                    data=build_context(request, loops=loops, entity_names=entity_names),
                     visibility=self._visibility(account, None, [], []),
                 )
 

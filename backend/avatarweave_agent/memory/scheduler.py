@@ -37,6 +37,141 @@ class MaintenanceCursor(Contract):
 
 
 class SchedulerMixin:
+    async def schedule_source_repair(self, scope):
+        """Versioned bounded source sweep; no model call or scan on the voice path."""
+        from .contracts import JobSpec, VersionRef
+        from .storage import Outbox, SourceRevision
+        from .tables import EvidenceSuppression, Job
+        from .utils import utc
+
+        version = "daily-life-extract.v3"
+        key = "source-repair:" + hashlib.sha256(scope.model_dump_json().encode()).hexdigest()
+        created = 0
+        async with self.database.sessions.begin() as db:
+            account = await self._account(db, scope, lock=True)
+            if not PrivacyPreference.model_validate_json(
+                account.preferences_json
+            ).long_term_memory_enabled:
+                return 0
+            marker = await db.get(DerivedView, (key, 1))
+            import json
+
+            state = json.loads(marker.document_json) if marker else {}
+            after = (
+                state.get("after", 0)
+                if state.get("version") == version and state.get("epoch") == account.privacy_epoch
+                else 0
+            )
+            rows = list(
+                await db.scalars(
+                    select(SourceRevision)
+                    .where(
+                        SourceRevision.account_id == account.id,
+                        SourceRevision.companion_id == scope.companion_id,
+                        SourceRevision.sequence > after,
+                    )
+                    .order_by(SourceRevision.sequence)
+                    .limit(10)
+                )
+            )
+            for source in rows:
+                if source.state == "persisted" and not source.revoked:
+                    active = await db.scalar(
+                        select(Job.id)
+                        .where(
+                            Job.account_id == account.id,
+                            Job.companion_id == scope.companion_id,
+                            Job.state.in_(["queued", "running", "retry_wait"]),
+                            Job.spec_json.contains(source.event_id, autoescape=True),
+                        )
+                        .limit(1)
+                    )
+                    pending = await db.scalar(
+                        select(Outbox.id)
+                        .where(
+                            Outbox.account_id == account.id,
+                            Outbox.event_id == source.event_id,
+                            Outbox.source_revision == source.revision,
+                            Outbox.state.in_(["queued", "running", "retry_wait"]),
+                        )
+                        .limit(1)
+                    )
+                    if active or pending:
+                        break
+                if (
+                    source.revoked
+                    or not source.source_json
+                    or utc(source.expires_at) <= self.clock()
+                    or source.origin not in {"user_text", "user_transcript"}
+                    or source.state
+                    not in {
+                        "persisted",
+                        "structured",
+                        "indexed",
+                        "rejected",
+                        "needs_confirmation",
+                        "failed",
+                    }
+                ):
+                    after = source.sequence
+                    continue
+                suppressed = await db.scalar(
+                    select(EvidenceSuppression.event_id)
+                    .where(
+                        EvidenceSuppression.account_id == account.id,
+                        EvidenceSuppression.event_id == source.event_id,
+                        EvidenceSuppression.source_revision == source.revision,
+                    )
+                    .limit(1)
+                )
+                job_id = hashlib.sha256(
+                    f"{version}:{account.privacy_epoch}:{source.event_id}:{source.revision}".encode()
+                ).hexdigest()
+                if not suppressed and await db.get(Job, job_id) is None:
+                    await self._job_capacity(db, account.id)
+                    spec = JobSpec(
+                        job_id=job_id,
+                        kind="extract",
+                        payload_ref=source.event_id,
+                        payload_schema="source-event.v1",
+                        source_refs=[
+                            VersionRef(object_id=source.event_id, version=source.revision)
+                        ],
+                        input_watermark=account.source_watermark,
+                        privacy_epoch=account.privacy_epoch,
+                        idempotency_key=job_id,
+                        available_at=self.clock(),
+                    )
+                    db.add(
+                        Job(
+                            id=job_id,
+                            account_id=account.id,
+                            companion_id=scope.companion_id,
+                            kind="extract",
+                            spec_json=spec.model_dump_json(),
+                            state="queued",
+                            attempt=0,
+                            available_at=self.clock(),
+                            created_at=self.clock(),
+                        )
+                    )
+                    created += 1
+                after = source.sequence
+            if marker is None:
+                marker = DerivedView(
+                    id=key,
+                    version=1,
+                    account_id=account.id,
+                    companion_id=scope.companion_id,
+                    kind="repair_cursor",
+                    state="valid",
+                )
+                db.add(marker)
+            marker.document_json = json.dumps(
+                {"after": after, "version": version, "epoch": account.privacy_epoch}
+            )
+        return created
+
     async def apply_tier_moves(self, request, moves, store):
         """Apply location metadata; cold changes first enqueue verified archival."""
         from .http import meta
@@ -119,6 +254,8 @@ class SchedulerMixin:
                 workspace_id=self.workspace_id, user_id=account_id, companion_id=companion
             )
             try:
+                if model_available:
+                    created += await self.schedule_source_repair(scope)
                 async with self.database.sessions() as db:
                     account = await self._account(db, scope)
                     prefs = PrivacyPreference.model_validate_json(account.preferences_json)

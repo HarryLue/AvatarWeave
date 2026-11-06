@@ -227,7 +227,7 @@ class PrivateConversation:
             self.turn_memory_enabled = (
                 self.turn_memory_enabled and self.preferences.long_term_memory_enabled
             )
-            budget = Budget()
+            budget = Budget(max_memory_tokens=3200)
             tone_result = await self.service.persona(
                 PersonaInput(
                     meta=meta(self.service),
@@ -287,7 +287,7 @@ class PrivateConversation:
                         queries=query_result.data.queries,
                         profile=self.profile,
                         budget=budget,
-                        include_historical=any(q.time_filter for q in query_result.data.queries),
+                        include_historical=any(q.time_filter or q.purpose == "reminisce" for q in query_result.data.queries),
                     ),
                     None if meeting_update else self.embedding_gateway,
                 )

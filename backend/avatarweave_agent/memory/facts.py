@@ -147,7 +147,7 @@ class FactMixin:
             raise MemoryFault("evidence_missing", "Source is missing or revoked")
         return row
 
-    async def _evidence(self, db, scope, candidate):
+    async def _evidence(self, db, scope, candidate, *, check_subject=True):
         events = {}
         for evidence in candidate.sources:
             row = await self._source(db, scope, evidence.event_id, evidence.source_revision)
@@ -181,7 +181,7 @@ class FactMixin:
                         "Evidence must retain surrounding attribution and context",
                     )
             events[(event.event_id, event.revision)] = event
-        if candidate.statement.subject_id != scope.user_id:
+        if check_subject and candidate.statement.subject_id != scope.user_id:
             entity = await db.scalar(
                 select(Entity).where(
                     Entity.id == candidate.statement.subject_id,
@@ -216,6 +216,24 @@ class FactMixin:
             raise MemoryFault(
                 "manual_review_required", "Model output cannot manufacture user confirmation"
             )
+        if (
+            check_subject
+            and candidate.statement.subject_id == scope.user_id
+            and candidate.statement.predicate == "name"
+            and candidate.statement.polarity == "positive"
+            and not any(event.origin == "user_ui" for event in events.values())
+        ):
+            value = re.escape(candidate.statement.canonical_value)
+            if not any(
+                re.search(
+                    r"(?:我(?:名)?叫|我的名字(?:是|叫)|叫我|称呼我)\s*" + value, pointer.quote
+                )
+                for pointer in candidate.sources
+            ):
+                raise MemoryFault(
+                    "manual_review_required",
+                    "A companion nickname cannot establish the user's name",
+                )
         rule_for(candidate)
         if not any(event.origin == "user_ui" for event in events.values()) and any(
             not any(normalized(q.value) in normalized(e.quote) for e in candidate.sources)
@@ -334,8 +352,8 @@ class FactMixin:
             if len(ids) != len(set(ids)):
                 raise MemoryFault("invalid_model_output", "Duplicate candidate identifiers")
             candidates, decisions = [], []
-            async with self.database.sessions() as db:
-                account = await self._account(db, request.scope)
+            async with self.database.sessions.begin() as db:
+                account = await self._account(db, request.scope, lock=True)
                 self._privacy(account, request)
                 from .job_context import verify_job_lease
 
@@ -350,6 +368,8 @@ class FactMixin:
                             "evidence_missing", "Extractor referenced an unprovided source"
                         )
                     try:
+                        # Validate the entire report before creating any entity.
+                        await self._evidence(db, request.scope, candidate, check_subject=False)
                         candidate = await self.normalize_subject(db, request.scope, candidate)
                         await self._evidence(db, request.scope, candidate)
                         decision, reason = "accept", "supported"
@@ -357,6 +377,27 @@ class FactMixin:
                         if exc.info.code == "evidence_missing":
                             raise
                         decision, reason = "defer", "out_of_scope"
+                        if candidate.interpretation in {
+                            "hypothetical",
+                            "quoted_other",
+                            "fictional",
+                            "joke_or_unclear",
+                        }:
+                            decision, reason = "reject", "hypothetical"
+                        if (
+                            candidate.statement.subject_id == request.scope.user_id
+                            and candidate.statement.predicate == "name"
+                            and candidate.statement.polarity == "positive"
+                            and not any(
+                                re.search(
+                                    r"(?:我(?:名)?叫|我的名字(?:是|叫)|叫我|称呼我)\s*"
+                                    + re.escape(candidate.statement.canonical_value),
+                                    p.quote,
+                                )
+                                for p in candidate.sources
+                            )
+                        ):
+                            decision, reason = "reject", "ambiguous_speaker"
                     candidates.append(candidate)
                     decisions.append(
                         AdmissionDecision(

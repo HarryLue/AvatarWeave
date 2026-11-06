@@ -1,6 +1,7 @@
 """M02 exact, scoped aliases; ambiguity is returned instead of forced merging."""
 
 import hashlib
+import re
 from typing import Annotated
 from uuid import uuid4
 
@@ -78,6 +79,71 @@ class EntityMixin:
 
     async def normalize_subject(self, db, scope, candidate):
         if candidate.statement.subject_id == scope.user_id:
+            if candidate.statement.predicate == "relationship":
+                # Only explicit introductions join a family role and a name.
+                # A coincident name or a pronoun never suffices to merge people.
+                for evidence in candidate.sources:
+                    match = re.search(
+                        r"我(?:的)?(妈妈|爸爸|姐姐|妹妹|哥哥|弟弟|妻子|丈夫|女朋友|男朋友)"
+                        r"(?:叫|名叫|名字是)([\u3400-\u9fff]{2,4})(?=[，。！？,!?；;\s]|$)",
+                        evidence.quote,
+                    )
+                    if not match:
+                        continue
+                    role, name = match.groups()
+                    ids = set(
+                        await db.scalars(
+                            select(EntityAlias.entity_id).where(
+                                EntityAlias.account_id == scope.user_id,
+                                EntityAlias.companion_id == scope.companion_id,
+                                EntityAlias.alias.in_([role, name]),
+                            )
+                        )
+                    )
+                    if len(ids) > 1:
+                        continue
+                    if ids:
+                        row = await db.get(Entity, next(iter(ids)))
+                    else:
+                        identified = await self.normalize_subject(
+                            db,
+                            scope,
+                            candidate.model_copy(
+                                update={
+                                    "statement": candidate.statement.model_copy(
+                                        update={"subject_id": role}
+                                    )
+                                }
+                            ),
+                        )
+                        row = await db.get(Entity, identified.statement.subject_id)
+                    value = EntityCandidate.model_validate_json(row.entity_json)
+                    refs = {(r.object_id, r.version): r for r in value.context_refs}
+                    for pointer in candidate.sources:
+                        ref = VersionRef(
+                            object_id=pointer.event_id, version=pointer.source_revision
+                        )
+                        if (ref.object_id, ref.version) not in refs:
+                            db.add(
+                                Dependency(
+                                    account_id=scope.user_id,
+                                    parent_id=ref.object_id,
+                                    parent_version=ref.version,
+                                    child_id=value.entity_id,
+                                    child_version=1,
+                                    relation="entity_from",
+                                )
+                            )
+                        refs[(ref.object_id, ref.version)] = ref
+                    value = value.model_copy(
+                        update={
+                            "aliases": sorted(set(value.aliases + [role, name]))[:16],
+                            "context_refs": list(refs.values())[-32:],
+                        }
+                    )
+                    row.entity_json = value.model_dump_json()
+                    await self.index_entity_aliases(db, scope, value)
+                    await db.flush()
             return candidate
         mention = normalized(candidate.statement.subject_id)
         matched_ids = select(EntityAlias.entity_id).where(
@@ -111,6 +177,65 @@ class EntityMixin:
                 for source in entity.context_refs:
                     await self._source(db, scope, source.object_id, source.version)
                 matches.append(entity.entity_id)
+        if (
+            not matches
+            and 1 < len(mention) <= 128
+            and mention
+            not in {
+                "他",
+                "她",
+                "他们",
+                "她们",
+                "那个人",
+                "这个人",
+                "朋友",
+                "同事",
+                "有人",
+                "自己",
+            }
+            and any(mention in source.quote for source in candidate.sources)
+        ):
+            # A directly attributed user report establishes a person automatically.
+            # Deterministic scoped IDs and the admission account lock make retries safe.
+            entity_id = hashlib.sha256(
+                (scope.model_dump_json() + ":person:" + mention).encode()
+            ).hexdigest()
+            value = EntityCandidate(
+                entity_id=entity_id,
+                entity_type="person",
+                canonical_name=mention,
+                aliases=[],
+                context_refs=list(
+                    {
+                        (p.event_id, p.source_revision): VersionRef(
+                            object_id=p.event_id, version=p.source_revision
+                        )
+                        for p in candidate.sources
+                    }.values()
+                ),
+            )
+            db.add(
+                Entity(
+                    id=entity_id,
+                    account_id=scope.user_id,
+                    companion_id=scope.companion_id,
+                    entity_json=value.model_dump_json(),
+                )
+            )
+            await self.index_entity_aliases(db, scope, value)
+            for ref in value.context_refs:
+                db.add(
+                    Dependency(
+                        account_id=scope.user_id,
+                        parent_id=ref.object_id,
+                        parent_version=ref.version,
+                        child_id=entity_id,
+                        child_version=1,
+                        relation="entity_from",
+                    )
+                )
+            await db.flush()
+            matches = [entity_id]
         if len(matches) != 1:
             raise MemoryFault(
                 "manual_review_required",

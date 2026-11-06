@@ -431,11 +431,12 @@ class JobMixin:
                         )
                     )
             accepted = {d.candidate_id for d in admission.data.decisions if d.decision == "accept"}
+            deferred = {d.candidate_id for d in admission.data.decisions if d.decision == "defer"}
             needs_confirmation, committed = False, False
             committed_refs = []
             for candidate in admission.data.candidates:
                 if candidate.candidate_id not in accepted:
-                    needs_confirmation = True
+                    needs_confirmation = needs_confirmation or candidate.candidate_id in deferred
                     continue
                 resolved = temporal(
                     TemporalInput(

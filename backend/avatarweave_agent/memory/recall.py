@@ -34,6 +34,34 @@ def lexemes(text):
     return list(dict.fromkeys(words))[:32]
 
 
+def recall_categories(text):
+    """Server-owned life intents, including questions without shared fact words."""
+    categories = set()
+    for words, predicates in [
+        (("喜欢", "偏好", "口味", "讨厌", "爱好"), {"preference"}),
+        (("重要的人", "家人", "朋友", "人物", "人际关系"), {"relationship"}),
+        (("人生", "时间线", "经历", "往事", "发生过"), {"important_event"}),
+        (("计划", "打算", "约定", "安排"), {"plan"}),
+    ]:
+        if any(word in text for word in words):
+            categories.update(predicates)
+    if any(
+        word in text for word in ("回忆一下", "记得什么", "记住了什么", "了解我", "关于我的记忆")
+    ):
+        categories.update(
+            {
+                "name",
+                "current_city",
+                "occupation",
+                "preference",
+                "relationship",
+                "important_event",
+                "plan",
+            }
+        )
+    return categories
+
+
 def plan_queries(request):
     text = request.latest_event.content
     queries = [
@@ -42,9 +70,21 @@ def plan_queries(request):
             text=text[:2048],
             route="lexical",
             entity_ids=request.known_entity_ids[:16],
-            purpose="answer",
+            purpose="reminisce" if recall_categories(text) & {"important_event"} else "answer",
         )
     ]
+    if len(recall_categories(text)) > 1 and request.known_entity_ids:
+        queries[0] = queries[0].model_copy(update={"entity_ids": []})
+        if len(queries) < request.budget.max_queries:
+            queries.append(
+                QuerySpec(
+                    query_id="people",
+                    text=text[:2048],
+                    route="entity",
+                    entity_ids=request.known_entity_ids[:16],
+                    purpose="answer",
+                )
+            )
     if request.recent_topic and len(queries) < request.budget.max_queries:
         queries.append(
             QuerySpec(
@@ -56,7 +96,7 @@ def plan_queries(request):
             )
         )
     match = re.search(
-        r"\d{4}年(?:\d{1,2}月(?:\d{1,2}日)?)?|(?:\d{1,3}|[一二两三四五六七八九十])年前|去年|昨天|前天",
+        r"\d{4}年(?:到|至|—|-)\d{4}年|\d{4}年(?:\d{1,2}月(?:\d{1,2}日)?)?|(?:\d{1,3}|[一二两三四五六七八九十]{1,3})年前|(?:去年|前年|今年)(?:\d{1,2}月)?|上个月|这个月|本月|(?:上周|本周|下周)[一二三四五六日天]?|昨天|前天",
         text,
     )
     if match:
@@ -234,7 +274,7 @@ class RecallMixin:
                             FactVersion.record_json.contains(term, autoescape=True)
                             for term in terms[:16]
                         ]
-                        predicates = {"interaction_boundary"}
+                        predicates = {"interaction_boundary"} | recall_categories(query.text)
                         if any(word in query.text for word in ("名字", "叫什么", "称呼", "我是谁")):
                             predicates.add("name")
                         if any(word in query.text for word in ("喜欢", "偏好", "口味")):
@@ -282,6 +322,21 @@ class RecallMixin:
                                 .limit(request.budget.max_candidates)
                             )
                         )
+                        categories = recall_categories(query.text)
+                        if len(categories) > 1 and route == "lexical":
+                            # Reserve bounded candidates for each life category before
+                            # ranking: a busy recent topic must not hide older people/events.
+                            selected = []
+                            per_category = max(1, request.budget.max_candidates // len(categories))
+                            for predicate in sorted(categories):
+                                selected.extend(
+                                    await db.scalars(
+                                        scoped_query.where(FactVersion.predicate == predicate)
+                                        .order_by(FactVersion.system_from.desc())
+                                        .limit(per_category)
+                                    )
+                                )
+                            selected = selected[: request.budget.max_candidates]
                         scored = []
                         for row in selected:
                             record = load_record(row)
@@ -302,9 +357,18 @@ class RecallMixin:
                             ):
                                 scored.append((score, record))
                         participating.add(route)
-                        for rank, (score, record) in enumerate(
-                            sorted(scored, key=lambda x: x[0], reverse=True)[:20], 1
-                        ):
+                        ordered = sorted(scored, key=lambda x: x[0], reverse=True)
+                        if len(categories) > 1:
+                            first, rest, seen = [], [], set()
+                            for item in ordered:
+                                predicate = item[1].statement.predicate
+                                if predicate not in seen:
+                                    first.append(item)
+                                    seen.add(predicate)
+                                else:
+                                    rest.append(item)
+                            ordered = first + rest
+                        for rank, (score, record) in enumerate(ordered[:20], 1):
                             key = (record.ref.object_id, record.ref.version)
                             records[key] = record
                             ranked[key].append(
@@ -528,6 +592,18 @@ class RecallMixin:
                 ),
                 reverse=True,
             )
+            # Broad life reviews must not spend the whole context on one category.
+            categories = set().union(*(recall_categories(q.text) for q in request.queries))
+            if len(categories) > 1:
+                representatives, remaining, seen_categories = [], [], set()
+                for hit in selected:
+                    predicate = hit.record.statement.predicate
+                    if predicate in categories and predicate not in seen_categories:
+                        representatives.append(hit)
+                        seen_categories.add(predicate)
+                    else:
+                        remaining.append(hit)
+                selected = representatives + remaining
             selected = selected[: request.budget.max_candidates]
             output = RetrievalOutput(
                 candidates=selected,

@@ -191,6 +191,15 @@ class ModelGateway:
     async def extract(self, request: AdmissionInput):
         from .contracts import ModelMessage
 
+        if len(request.events) == 1:
+            text = request.events[0].content.strip()
+            if re.search(
+                r"这是一条[^。\n]{0,40}(?:连接|连通性|恢复)[^。\n]{0,10}测试", text
+            ) or re.fullmatch(
+                r"(?:你再想想|我刚才告诉你(?:他的|她的|我的)?名字了|你还记得[^。！？]{0,30})[。！？?！]*",
+                text,
+            ):
+                return AdmissionOutput(candidates=[], decisions=[], input_watermark=0)
         if literal := literal_self_name(request):
             return literal
         allowed = ", ".join(PREDICATES)
@@ -205,7 +214,16 @@ class ModelGateway:
             "由服务端匹配已确认的稳定实体；不得编造第三人 ID，不把第三人的经历归给用户。"
             "只使用谓词：" + allowed + "。namespace=life；assertion_kind=user_report。"
             "这些谓词的 value_type 全部使用 text（姓名也使用 text）；不要使用 entity_ref。"
+            "content_kind 严格映射：name/current_city/occupation/interaction_boundary→fact，"
+            "preference→preference，important_event→episode，relationship→relationship，plan→future_intent。"
+            "禁止使用 event、life_event、plan 等不在 content_kind 枚举中的值。"
             "canonical_value 必须是原话中的子串，display_text 简短忠实；明确否定保留 negative。"
+            "按生活信息逐项覆盖：偏好/厌恶、重要人物及关系、经历与人生阶段、未来计划、互动边界。"
+            "一句话含多类信息时分别提取，不只保留姓名或城市；普通但值得延续的日常经历也用 important_event。"
+            "relationship 的值保留人物称呼和关系，target/relationship_type 只取原文子串。"
+            "偏好的对象、情境与否定分别保留；不把一次心情当长期偏好。"
+            "过去居住、求学、工作阶段用 important_event 保留，不覆盖 current_city/occupation 的当前状态。"
+            "用户给数字人起名属于互动称呼偏好，使用 interaction_boundary，不得写为用户本人的 name。"
             "不推断人格或诊断。日期仅以 original_expression 保留用户原始表达，start/end 置 null，precision=unknown。"
             "不产生已提交、已播放或已索引的声明。decisions 可以为空，准入由服务端重新判断。"
             f"最多 {request.max_candidates} 条候选。input_watermark=0。"
@@ -235,6 +253,10 @@ class ModelGateway:
                     validate_extraction(result.payload, request)
                     return result.payload
                 except MemoryFault as error:
+                    if attempt and error.info.code == "invalid_model_output":
+                        raise MemoryFault(
+                            error.info.code, error.info.message, retryable=True
+                        ) from None
                     if attempt or error.info.code not in {
                         "invalid_model_output",
                         "evidence_missing",
@@ -247,6 +269,7 @@ class ModelGateway:
                                 ModelMessage(
                                     role="system",
                                     content="上次输出未通过结构或原文证据校验。请重新提取完整 JSON。"
+                                    "content_kind 仅允许 fact/preference/episode/relationship/future_intent，important_event 对应 episode，plan 对应 future_intent。"
                                     "所有字段必须符合 schema；canonical_value 和 qualifier.value 必须逐字出现于引用原文，"
                                     "例如不能把原文‘会议’改写为‘开会’。来源 ID、revision、origin 必须与输入一致，"
                                     "quote 必须为原文完整语句。不得编造事实、证据或用户确认；没有可提取事实时返回空 candidates。",

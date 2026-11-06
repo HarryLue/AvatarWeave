@@ -28,12 +28,12 @@ async def test_person_confirmation_reprocesses_original_source_without_promoting
     service = foundation
     write = await event_request(service, await account(service))
     write = write.model_copy(
-        update={"event": write.event.model_copy(update={"content": "我妈妈李云住在杭州"})}
+        update={"event": write.event.model_copy(update={"content": "我的同事李云住在杭州"})}
     )
     await service.input_event(write)
     candidate = candidate_for(write, value="杭州")
     candidate = candidate.model_copy(
-        update={"statement": candidate.statement.model_copy(update={"subject_id": "妈妈"})}
+        update={"statement": candidate.statement.model_copy(update={"subject_id": "同事"})}
     )
 
     class Extractor:
@@ -47,12 +47,12 @@ async def test_person_confirmation_reprocesses_original_source_without_promoting
         ).state == "needs_confirmation"
     body = EntityBody(
         canonical_name="李云",
-        aliases=["妈妈"],
+        aliases=["同事"],
         expected_version=None,
         idempotency_key="confirm-mother",
     )
     person = await service.save_entity(write.scope, body)
-    assert person.entity_id != "妈妈" and person.version == 1
+    assert person.entity_id != "同事" and person.version == 1
     assert (await service.save_entity(write.scope, body)) == person
     await service.next_job("worker", Extractor())
     async with service.database.sessions() as db:
@@ -64,7 +64,7 @@ async def test_person_confirmation_reprocesses_original_source_without_promoting
         write.scope,
         EntityBody(
             canonical_name="李芸",
-            aliases=["妈妈", "李云"],
+            aliases=["同事", "李云"],
             expected_version=1,
             idempotency_key="rename",
         ),
